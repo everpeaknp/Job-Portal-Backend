@@ -338,7 +338,7 @@ class TaskReportSerializer(serializers.ModelSerializer):
             'id', 'task', 'reason', 'description', 'status',
             'reported_by', 'reported_by_name', 'created_at'
         ]
-        read_only_fields = ['id', 'reported_by', 'status', 'created_at']
+        read_only_fields = ['id', 'task', 'reported_by', 'status', 'created_at']
 
 
 class TaskStatsSerializer(serializers.Serializer):
