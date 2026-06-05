@@ -106,7 +106,11 @@ class DashboardService:
             avg_rating_given = Review.objects.filter(reviewer=user).aggregate(
                 avg=Avg('overall_rating')
             )['avg'] or 0
-            
+            reviews_received = Review.objects.filter(reviewee=user).count()
+            avg_rating_received = Review.objects.filter(reviewee=user).aggregate(
+                avg=Avg('overall_rating')
+            )['avg'] or 0
+
             return {
                 'role': 'customer',
                 'tasks': {
@@ -121,6 +125,8 @@ class DashboardService:
                 'reviews': {
                     'given': reviews_given,
                     'average_rating_given': round(float(avg_rating_given), 2),
+                    'received': reviews_received,
+                    'average_rating': round(float(avg_rating_received), 2),
                 }
             }
         except Exception as e:
@@ -143,6 +149,8 @@ class DashboardService:
                 'reviews': {
                     'given': 0,
                     'average_rating_given': 0.00,
+                    'received': 0,
+                    'average_rating': 0.00,
                 }
             }
     
