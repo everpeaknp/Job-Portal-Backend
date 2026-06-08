@@ -14,6 +14,7 @@ import logging
 
 from .models import Bid, BidMessage, BidReview, BidNotification
 from .workflow import BidWorkflowService
+from utils.helpers import format_currency
 
 logger = logging.getLogger(__name__)
 from .serializers import (
@@ -281,7 +282,11 @@ class BidViewSet(viewsets.ModelViewSet):
                 bid=counter_bid,
                 recipient=bid.tasker,
                 notification_type='counter_offer',
-                message=f"You received a counter offer of ${counter_bid.amount} on '{bid.task.title}'"
+                message=(
+                    f"You received a counter offer of "
+                    f"{format_currency(counter_bid.amount, counter_bid.currency)} "
+                    f"on '{bid.task.title}'"
+                )
             )
             
             response_serializer = BidDetailSerializer(counter_bid)

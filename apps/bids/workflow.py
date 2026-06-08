@@ -15,6 +15,7 @@ from apps.chat.conversation_resolver import get_or_create_conversation
 from apps.notifications.services import NotificationService
 from apps.payments.services import EscrowService
 from apps.users.models import User
+from utils.helpers import format_currency
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,10 @@ class BidWorkflowService:
                 task=task,
                 activity_type='bid_accepted',
                 actor=task_owner,
-                description=f"Accepted bid from {bid.tasker.get_full_name()} for ${bid.amount}",
+                description=(
+                    f"Accepted bid from {bid.tasker.get_full_name()} "
+                    f"for {format_currency(bid.amount, bid.currency)}"
+                ),
                 metadata={
                     'bid_id': str(bid.id),
                     'amount': str(bid.amount),
@@ -170,7 +174,8 @@ class BidWorkflowService:
                         notification_type='bid_accepted',
                         title='Your bid was accepted',
                         message=(
-                            f'{owner_name} accepted your bid of ${bid_amount} '
+                            f'{owner_name} accepted your bid of '
+                            f'{format_currency(bid_amount, bid.currency)} '
                             f'for "{task_title}". Payment is now in escrow.'
                         ),
                         related_object=bid,

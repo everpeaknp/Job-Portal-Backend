@@ -26,6 +26,19 @@ def calculate_platform_fee(amount, percentage=15):
     return round(amount * (percentage / 100), 2)
 
 
-def format_currency(amount):
-    """Format amount as currency."""
-    return f"${amount:.2f}"
+def format_currency(amount, currency=None):
+    """Format amount with platform currency (default NPR)."""
+    from django.conf import settings
+
+    currency = currency or getattr(settings, 'DEFAULT_CURRENCY', 'NPR')
+    try:
+        value = float(amount)
+    except (TypeError, ValueError):
+        value = 0.0
+
+    if value == int(value):
+        formatted = f"{int(value):,}"
+    else:
+        formatted = f"{value:,.2f}".rstrip('0').rstrip('.')
+
+    return f"{currency} {formatted}"

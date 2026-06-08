@@ -72,6 +72,7 @@ class TaskListSerializer(serializers.ModelSerializer):
         decimal_places=2,
         read_only=True
     )
+    owner_is_verified = serializers.SerializerMethodField()
     category_name = serializers.CharField(source='category.name', read_only=True)
     is_open = serializers.BooleanField(read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
@@ -111,6 +112,10 @@ class TaskListSerializer(serializers.ModelSerializer):
         if request:
             return request.build_absolute_uri(url)
         return url
+
+    def get_owner_is_verified(self, obj):
+        owner = getattr(obj, 'owner', None)
+        return bool(owner and getattr(owner, 'is_verified_tasker', False))
     
     class Meta:
         model = Task
@@ -123,7 +128,7 @@ class TaskListSerializer(serializers.ModelSerializer):
             # frontend's default fallback coordinates.
             'latitude', 'longitude',
             'category', 'category_name', 'owner', 'owner_name',
-            'owner_image', 'owner_rating', 'assigned_tasker', 'due_date',
+            'owner_image', 'owner_rating', 'owner_is_verified', 'assigned_tasker', 'due_date',
             'is_open', 'is_overdue', 'views_count', 'bids_count', 'created_at'
         ]
         read_only_fields = [

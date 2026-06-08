@@ -23,6 +23,7 @@ from .serializers import (
     UserRegistrationSerializer, ChangePasswordSerializer,
     PasswordResetRequestSerializer, PasswordResetConfirmSerializer,
     EmailVerificationSerializer, UserStatsSerializer,
+    UserDirectorySerializer,
     TaskerPublicProfileSerializer, PublicProfileSerializer, UserSkillSerializer,
     UserBadgeSerializer, UserBadgeCreateSerializer, UserDocumentSerializer,
     PortfolioItemSerializer,
@@ -81,7 +82,9 @@ class UserViewSet(viewsets.ModelViewSet):
             'register',
             'profile_by_username',
             'public_profile',
+            'posted_tasks',
             'taskers',
+            'directory',
             'follow_status',
             'reviews',
         ]:
@@ -89,6 +92,30 @@ class UserViewSet(viewsets.ModelViewSet):
         if self.action in ['update', 'partial_update', 'destroy']:
             return [IsOwner()]
         return [IsAuthenticated()]
+
+    @action(detail=True, methods=['get'], url_path='posted_tasks', permission_classes=[AllowAny])
+    def posted_tasks(self, request, pk=None):
+        """
+        GET /api/v1/users/{id}/posted_tasks/
+        Public open tasks posted by this user (for profile page).
+        """
+        from apps.tasks.models import Task
+        from apps.tasks.serializers import TaskListSerializer
+
+        user = self.get_object()
+        tasks = (
+            Task.objects.filter(owner=user, is_public=True, status='open')
+            .select_related('owner', 'category', 'assigned_tasker')
+            .order_by('-created_at')
+        )
+
+        page = self.paginate_queryset(tasks)
+        if page is not None:
+            serializer = TaskListSerializer(page, many=True, context={'request': request})
+            return self.get_paginated_response(serializer.data)
+
+        serializer = TaskListSerializer(tasks, many=True, context={'request': request})
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='reviews', permission_classes=[AllowAny])
     def reviews(self, request, pk=None):
@@ -274,6 +301,63 @@ class UserViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
         
         serializer = TaskerPublicProfileSerializer(taskers, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny])
+    def directory(self, request):
+        """
+        GET /api/v1/users/directory/
+        Public browseable user list with search and filters.
+        """
+        users = User.objects.filter(is_active=True)
+
+        q = (request.query_params.get('search') or request.query_params.get('q') or '').strip()
+        role = (request.query_params.get('role') or 'all').strip().lower()
+        city = (request.query_params.get('city') or '').strip()
+        min_rating = request.query_params.get('min_rating')
+        verified_only = request.query_params.get('verified_only', '').lower()
+        sort_by = (request.query_params.get('sort_by') or 'rating').strip().lower()
+
+        if role and role != 'all':
+            users = users.filter(role=role)
+        if q:
+            users = users.filter(
+                Q(first_name__icontains=q)
+                | Q(last_name__icontains=q)
+                | Q(username__icontains=q)
+                | Q(bio__icontains=q)
+                | Q(tagline__icontains=q)
+                | Q(city__icontains=q)
+            ).distinct()
+        if city:
+            users = users.filter(city__icontains=city)
+        if min_rating:
+            try:
+                users = users.filter(average_rating__gte=float(min_rating))
+            except (TypeError, ValueError):
+                pass
+        if verified_only in ('true', '1', 'yes'):
+            users = users.filter(is_verified_tasker=True)
+
+        if sort_by == 'tasks':
+            users = users.order_by('-tasks_completed', '-average_rating')
+        elif sort_by == 'newest':
+            users = users.order_by('-date_joined')
+        elif sort_by == 'name':
+            users = users.order_by('first_name', 'last_name')
+        else:
+            users = users.order_by('-average_rating', '-total_reviews')
+
+        page = self.paginate_queryset(users)
+        if page is not None:
+            serializer = UserDirectorySerializer(
+                page, many=True, context={'request': request}
+            )
+            return self.get_paginated_response(serializer.data)
+
+        serializer = UserDirectorySerializer(
+            users, many=True, context={'request': request}
+        )
         return Response(serializer.data)
     
     @action(detail=False, methods=['post'], url_path='me/upload-image', permission_classes=[IsAuthenticated])

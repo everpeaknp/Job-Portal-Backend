@@ -1,11 +1,39 @@
 """
 Serializers for User models.
 """
+import re
+
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.base_user import BaseUserManager
 from django.core.exceptions import ValidationError
 from .models import User, UserSkill, UserBadge, UserDocument, PortfolioItem
+
+
+def _short_city_label(value):
+    value = (value or '').strip()
+    if not value:
+        return ''
+    value = re.sub(r'\s+sub-metropolitan city$', '', value, flags=re.I)
+    value = re.sub(r'\s+metropolitan city$', '', value, flags=re.I)
+    value = re.sub(r'\s+municipality$', '', value, flags=re.I)
+    return value.strip()
+
+
+def _short_location_display(user):
+    city = (user.city or '').strip()
+    if city:
+        return _short_city_label(city)
+    address = (user.address or '').strip()
+    if not address:
+        return ''
+    first_line = address.replace('\r\n', '\n').split('\n')[0].strip()
+    first_segment = first_line.split(',')[0].strip() if first_line else ''
+    if first_segment:
+        return _short_city_label(first_segment)
+    if len(first_line) > 48:
+        return first_line[:45] + '...'
+    return first_line
 
 
 class UserSkillSerializer(serializers.ModelSerializer):
@@ -466,6 +494,47 @@ class UserStatsSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class UserDirectorySerializer(serializers.ModelSerializer):
+    """Public user card for /users/ directory (search + filters)."""
+
+    full_name = serializers.CharField(source='get_full_name', read_only=True)
+    profile_image = serializers.SerializerMethodField()
+    location_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'username',
+            'full_name',
+            'profile_image',
+            'role',
+            'bio',
+            'tagline',
+            'city',
+            'state',
+            'country',
+            'location_display',
+            'average_rating',
+            'total_reviews',
+            'tasks_completed',
+            'is_verified_tasker',
+            'is_online',
+        ]
+        read_only_fields = fields
+
+    def get_profile_image(self, obj):
+        if obj.profile_image:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.profile_image.url)
+            return obj.profile_image.url
+        return None
+
+    def get_location_display(self, obj):
+        return _short_location_display(obj)
+
+
 class TaskerPublicProfileSerializer(serializers.ModelSerializer):
     """Public profile serializer for taskers (visible to customers)."""
     
@@ -523,10 +592,7 @@ class PublicProfileSerializer(TaskerPublicProfileSerializer):
         return obj.get_full_name() or obj.username or 'User'
 
     def get_location_display(self, obj):
-        parts = [p for p in [obj.city, obj.state, obj.country] if p]
-        if parts:
-            return ', '.join(parts)
-        return obj.address or ''
+        return _short_location_display(obj)
 
     def get_online_status(self, obj):
         if obj.is_online:
