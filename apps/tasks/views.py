@@ -19,7 +19,8 @@ from .models import (
     TaskView, TaskQuestion, TaskReport
 )
 from .attachment_service import (
-    ALLOWED_TASK_ATTACHMENT_CONTENT_TYPES,
+    TASK_ATTACHMENT_TYPE_ERROR,
+    is_allowed_task_attachment,
     MAX_TASK_ATTACHMENT_BYTES,
     build_task_attachment_file_url,
     classify_task_attachment_type,
@@ -32,7 +33,11 @@ from .serializers import (
     TaskReportSerializer, TaskStatsSerializer
 )
 from apps.users.permissions import IsOwner, IsCustomer, IsTasker
-from .permissions import IsTaskOwner, IsTaskOwnerOrReadOnly
+from .permissions import IsTaskOwner, IsTaskOwnerOrReadOnly, CanCreateTask
+from .listing import (
+    LISTING_KIND_CHOICES,
+    filter_queryset_by_listing_kind,
+)
 from apps.rules.integrations import cancel_task_with_rules
 from apps.rules.permissions import NotSuspended
 
@@ -77,18 +82,24 @@ class TaskViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """Return appropriate queryset based on user."""
         user = self.request.user
-        
+
+        queryset = Task.objects.all()
         if user.is_authenticated:
-            # Authenticated users see public tasks + their own tasks
-            return Task.objects.filter(
-                Q(is_public=True) | Q(owner=user)
-            ).select_related('owner', 'category', 'assigned_tasker')
+            queryset = queryset.filter(Q(is_public=True) | Q(owner=user))
         else:
-            # Anonymous users see only public open tasks
-            return Task.objects.filter(
-                is_public=True,
-                status='open'
-            ).select_related('owner', 'category')
+            queryset = queryset.filter(is_public=True, status='open')
+
+        return queryset.select_related(
+            'owner', 'owner__employer_profile', 'category', 'assigned_tasker'
+        ).prefetch_related('attachments')
+    
+    def filter_queryset(self, queryset):
+        """Apply DRF filters plus optional listing_kind query param."""
+        queryset = super().filter_queryset(queryset)
+        listing_kind = self.request.query_params.get('listing_kind')
+        if listing_kind in LISTING_KIND_CHOICES:
+            queryset = filter_queryset_by_listing_kind(queryset, listing_kind)
+        return queryset
     
     def get_serializer_class(self):
         """Return appropriate serializer class."""
@@ -104,10 +115,28 @@ class TaskViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         """Set permissions based on action."""
-        if self.action in ['create']:
-            return [IsAuthenticated(), IsCustomer()]
-        elif self.action in ['update', 'partial_update', 'destroy', 'answer_question']:
+        if self.action == 'create':
+            return [IsAuthenticated(), CanCreateTask()]
+        if self.action in ['update', 'partial_update', 'destroy']:
             return [IsAuthenticated(), IsTaskOwner()]
+        if self.action in ['publish', 'answer_question']:
+            return [IsAuthenticated(), IsTaskOwner()]
+        if self.action == 'reviews':
+            return [AllowAny()]
+        if self.action == 'cancel':
+            return [IsAuthenticated(), NotSuspended()]
+        if self.action in [
+            'my_tasks',
+            'assigned_tasks',
+            'bookmarked',
+            'stats',
+            'update_status',
+            'confirm_work_complete',
+            'bookmark',
+            'ask_question',
+            'report',
+        ]:
+            return [IsAuthenticated()]
         return [IsAuthenticatedOrReadOnly()]
 
     @action(detail=True, methods=['get'], permission_classes=[AllowAny], url_path='reviews')
@@ -331,15 +360,39 @@ class TaskViewSet(viewsets.ModelViewSet):
         new_status = serializer.validated_data['status']
 
         if new_status == 'completed':
-            return Response(
-                {
-                    'error': (
-                        'Both the poster and tasker must confirm completion before '
-                        'payment is released. Use POST .../confirm_work_complete/ instead.'
-                    ),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+            unassigned_open = (
+                task.status == 'open'
+                and not task.assigned_tasker_id
+                and task.owner_id == request.user.id
             )
+            if unassigned_open and task.bids.filter(status='pending').exists():
+                return Response(
+                    {
+                        'error': (
+                            'Cannot mark as completed while proposals are still pending. '
+                            'Accept or reject them first.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not unassigned_open:
+                return Response(
+                    {
+                        'error': (
+                            'Both the poster and tasker must confirm completion before '
+                            'payment is released. Use POST .../confirm_work_complete/ instead.'
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            task.status = 'completed'
+            task.completion_date = timezone.now()
+            task.completed_at = timezone.now()
+            task.save(update_fields=['status', 'completion_date', 'completed_at', 'updated_at'])
+            return Response({
+                'message': 'Task marked as completed.',
+                'task': TaskDetailSerializer(task, context={'request': request}).data,
+            })
 
         task.status = new_status
 
@@ -458,6 +511,10 @@ class TaskViewSet(viewsets.ModelViewSet):
     def my_tasks(self, request):
         """Get current user's posted tasks."""
         tasks = Task.objects.filter(owner=request.user).order_by('-created_at')
+
+        listing_kind = request.query_params.get('listing_kind')
+        if listing_kind in LISTING_KIND_CHOICES:
+            tasks = filter_queryset_by_listing_kind(tasks, listing_kind)
         
         page = self.paginate_queryset(tasks)
         if page is not None:
@@ -616,23 +673,15 @@ class TaskAttachmentViewSet(viewsets.ModelViewSet):
             )
 
         content_type = (uploaded_file.content_type or '').lower()
-        file_type = classify_task_attachment_type(content_type, uploaded_file.name)
-        if file_type != 'image':
+        if not is_allowed_task_attachment(content_type, uploaded_file.name):
             return Response(
-                {
-                    'error': (
-                        'Invalid file type. Only JPG, PNG, WEBP, and GIF images are allowed.'
-                    ),
-                },
+                {'error': TASK_ATTACHMENT_TYPE_ERROR},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if content_type and content_type not in ALLOWED_TASK_ATTACHMENT_CONTENT_TYPES:
+        file_type = classify_task_attachment_type(content_type, uploaded_file.name)
+        if file_type not in ('image', 'document'):
             return Response(
-                {
-                    'error': (
-                        'Invalid file type. Only JPG, PNG, WEBP, and GIF images are allowed.'
-                    ),
-                },
+                {'error': TASK_ATTACHMENT_TYPE_ERROR},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

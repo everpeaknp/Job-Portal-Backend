@@ -22,6 +22,13 @@ Frontend expects:
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .employer_views import (
+    EmployerGalleryDetailView,
+    EmployerGalleryListCreateView,
+    EmployerLogoUploadView,
+    EmployerProfileMeView,
+)
+from .freelancer_views import FreelancerProfileMeView
 from .views import (
     UserViewSet, UserSkillViewSet, UserBadgeViewSet, UserDocumentViewSet,
     UserRegistrationView, PasswordResetRequestView, PasswordResetConfirmView,
@@ -56,6 +63,19 @@ urlpatterns = [
     # Documents  →  GET/POST  /api/v1/users/me/documents/
     path('me/documents/', UserDocumentViewSet.as_view({'get': 'list', 'post': 'create'}), name='my-documents'),
     path('me/documents/<pk>/', UserDocumentViewSet.as_view({'get': 'retrieve', 'patch': 'partial_update', 'delete': 'destroy'}), name='my-document-detail'),
+
+    # Freelancer (tasker) public profile editing
+    path('me/freelancer-profile/', FreelancerProfileMeView.as_view(), name='my-freelancer-profile'),
+
+    # Employer business profile
+    path('me/employer-profile/', EmployerProfileMeView.as_view(), name='my-employer-profile'),
+    path('me/employer-profile/logo/', EmployerLogoUploadView.as_view(), name='my-employer-logo'),
+    path('me/employer-profile/gallery/', EmployerGalleryListCreateView.as_view(), name='my-employer-gallery'),
+    path(
+        'me/employer-profile/gallery/<uuid:id>/',
+        EmployerGalleryDetailView.as_view(),
+        name='my-employer-gallery-detail',
+    ),
 
     # ── Router URLs (UserViewSet: me, stats, taskers, <pk>/, etc.) ────────────
     path('', include(router.urls)),

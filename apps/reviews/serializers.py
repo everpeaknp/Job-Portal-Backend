@@ -12,6 +12,7 @@ class ReviewListSerializer(serializers.ModelSerializer):
     reviewer = PublicUserSerializer(read_only=True)
     reviewee = PublicUserSerializer(read_only=True)
     task_title = serializers.CharField(source='task.title', read_only=True)
+    task_budget_type = serializers.CharField(source='task.budget_type', read_only=True)
     rating = serializers.IntegerField(source='overall_rating', read_only=True)
     comment = serializers.CharField(source='review_text', read_only=True)
 
@@ -21,6 +22,7 @@ class ReviewListSerializer(serializers.ModelSerializer):
             'id',
             'task',
             'task_title',
+            'task_budget_type',
             'reviewer',
             'reviewee',
             'reviewer_type',

@@ -41,6 +41,25 @@ class IsTaskOwnerOrAssignedTasker(permissions.BasePermission):
         return obj.owner == request.user or obj.assigned_tasker == request.user
 
 
+class CanCreateTask(permissions.BasePermission):
+    """
+    Customers create job/project listings; taskers create service listings.
+    """
+
+    message = 'You do not have permission to create this listing.'
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if getattr(user, 'role', None) == 'admin':
+            return True
+        listing_kind = request.data.get('listing_kind') if hasattr(request.data, 'get') else None
+        if listing_kind == 'service':
+            return user.role == 'tasker'
+        return user.role == 'customer'
+
+
 class CanBidOnTask(permissions.BasePermission):
     """
     Permission to check if user can bid on a task.

@@ -7,12 +7,31 @@ import uuid
 from django.core.files.storage import default_storage
 
 MAX_TASK_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
 ALLOWED_TASK_ATTACHMENT_CONTENT_TYPES = {
     'image/jpeg',
     'image/png',
     'image/webp',
     'image/gif',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 }
+
+ALLOWED_TASK_ATTACHMENT_EXTENSIONS = {
+    '.jpg',
+    '.jpeg',
+    '.png',
+    '.webp',
+    '.gif',
+    '.pdf',
+    '.doc',
+    '.docx',
+}
+
+TASK_ATTACHMENT_TYPE_ERROR = (
+    'Invalid file type. Only JPG, PNG, WEBP, GIF, PDF, DOC, and DOCX files are allowed.'
+)
 
 
 def save_task_attachment_upload(user, task, uploaded_file) -> str:
@@ -35,6 +54,12 @@ def classify_task_attachment_type(content_type: str, filename: str) -> str:
     ct = (content_type or '').lower()
     if ct.startswith('image/'):
         return 'image'
+    if ct in (
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ):
+        return 'document'
     name = (filename or '').lower()
     if name.endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
         return 'image'
@@ -43,3 +68,14 @@ def classify_task_attachment_type(content_type: str, filename: str) -> str:
     if name.endswith(('.mp4', '.mov', '.webm', '.avi')):
         return 'video'
     return 'other'
+
+
+def is_allowed_task_attachment(content_type: str, filename: str) -> bool:
+    """Accept known MIME types or trusted extensions (e.g. octet-stream uploads)."""
+    ct = (content_type or '').lower()
+    if ct in ALLOWED_TASK_ATTACHMENT_CONTENT_TYPES:
+        return True
+    ext = os.path.splitext(filename or '')[1].lower()
+    if ext in ALLOWED_TASK_ATTACHMENT_EXTENSIONS:
+        return True
+    return False

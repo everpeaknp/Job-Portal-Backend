@@ -236,6 +236,15 @@ class WalletTransactionViewSet(viewsets.ModelViewSet):
         transaction_type = request.query_params.get('type')
         if transaction_type:
             transactions = transactions.filter(transaction_type=transaction_type)
+
+        # Filter by purpose (e.g. recharge = wallet top-ups only, not task earnings)
+        purpose = request.query_params.get('purpose')
+        if purpose == 'recharge':
+            from .utils import WALLET_RECHARGE_Q
+
+            transactions = transactions.filter(
+                transaction_type__in=('credit', 'bonus'),
+            ).filter(WALLET_RECHARGE_Q)
         
         # Filter by status
         status_filter = request.query_params.get('status')

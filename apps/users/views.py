@@ -309,7 +309,7 @@ class UserViewSet(viewsets.ModelViewSet):
         GET /api/v1/users/directory/
         Public browseable user list with search and filters.
         """
-        users = User.objects.filter(is_active=True)
+        users = User.objects.filter(is_active=True).prefetch_related('skills')
 
         q = (request.query_params.get('search') or request.query_params.get('q') or '').strip()
         role = (request.query_params.get('role') or 'all').strip().lower()

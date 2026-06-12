@@ -293,6 +293,7 @@ class UserSkill(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='skills')
     name = models.CharField(max_length=100)
+    details = models.TextField(blank=True, default='')
     category = models.CharField(max_length=100, blank=True)
     proficiency_level = models.CharField(
         max_length=20,
@@ -465,3 +466,76 @@ class UserFollow(models.Model):
 
     def __str__(self):
         return f"{self.follower_id} follows {self.following_id}"
+
+
+class EmployerProfile(models.Model):
+    """Public business profile for employer (customer) accounts."""
+
+    ACCOUNT_TYPE_CHOICES = [
+        ('individual', 'Individual'),
+        ('company', 'Company'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='employer_profile',
+    )
+    account_type = models.CharField(
+        max_length=20,
+        choices=ACCOUNT_TYPE_CHOICES,
+        default='individual',
+    )
+    company_name = models.CharField(max_length=255, blank=True)
+    industry = models.CharField(max_length=120, blank=True)
+    team_size = models.CharField(max_length=80, blank=True)
+    website = models.URLField(blank=True)
+    cost_range = models.CharField(max_length=120, blank=True)
+    contact_email = models.EmailField(blank=True)
+    contact_phone = models.CharField(max_length=30, blank=True)
+    logo_color = models.CharField(max_length=40, default='serif-m')
+    logo_text = models.CharField(max_length=8, default='CO')
+    logo_image = models.ImageField(
+        upload_to='employer_logos/',
+        blank=True,
+        null=True,
+    )
+    is_public = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'employer_profiles'
+        indexes = [
+            models.Index(fields=['account_type']),
+            models.Index(fields=['is_public']),
+        ]
+
+    def __str__(self):
+        return self.company_name or str(self.user_id)
+
+
+class EmployerGalleryImage(models.Model):
+    """Gallery images for an employer public profile."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    profile = models.ForeignKey(
+        EmployerProfile,
+        on_delete=models.CASCADE,
+        related_name='gallery_images',
+    )
+    image = models.ImageField(upload_to='employer_gallery/')
+    alt_text = models.CharField(max_length=255, blank=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'employer_gallery_images'
+        ordering = ['sort_order', 'created_at']
+        indexes = [
+            models.Index(fields=['profile', 'sort_order']),
+        ]
+
+    def __str__(self):
+        return f'{self.profile_id} gallery {self.id}'

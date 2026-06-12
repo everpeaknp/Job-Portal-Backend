@@ -48,9 +48,11 @@ class CanAcceptBid(permissions.BasePermission):
             self.message = "Only pending bids can be accepted."
             return False
         
-        # Task must be open
-        if obj.task.status != 'open':
-            self.message = "Task is not open for bid acceptance."
+        # Task must be open or draft (matches BidWorkflowService)
+        if obj.task.status not in ('open', 'draft'):
+            self.message = (
+                f"Task is not open for bid acceptance (current status: {obj.task.status})."
+            )
             return False
 
         # Only one accepted offer per task

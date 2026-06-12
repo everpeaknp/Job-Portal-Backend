@@ -6,6 +6,7 @@ from django.utils import timezone
 from .models import Bid, BidMessage, BidReview, BidNotification
 from apps.users.serializers import UserListSerializer
 from apps.tasks.serializers import TaskListSerializer
+from apps.tasks.listing import get_listing_kind
 
 
 class BidMessageSerializer(serializers.ModelSerializer):
@@ -39,18 +40,25 @@ class BidListSerializer(serializers.ModelSerializer):
     
     tasker = UserListSerializer(read_only=True)
     task_title = serializers.CharField(source='task.title', read_only=True)
+    task_slug = serializers.CharField(source='task.slug', read_only=True)
+    task_city = serializers.CharField(source='task.city', read_only=True, allow_blank=True)
+    task_listing_kind = serializers.SerializerMethodField()
     is_pending = serializers.BooleanField(read_only=True)
     is_accepted = serializers.BooleanField(read_only=True)
     
     class Meta:
         model = Bid
         fields = [
-            'id', 'task', 'task_title', 'tasker', 'amount', 'currency',
+            'id', 'task', 'task_title', 'task_slug', 'task_city', 'task_listing_kind', 'tasker',
+            'amount', 'currency',
             'proposal', 'estimated_duration', 'estimated_completion_date',
             'status', 'is_pending', 'is_accepted', 'is_counter_offer',
             'created_at'
         ]
         read_only_fields = ['id', 'tasker', 'status', 'created_at']
+
+    def get_task_listing_kind(self, obj):
+        return get_listing_kind(obj.task.tags)
 
 
 class BidDetailSerializer(serializers.ModelSerializer):

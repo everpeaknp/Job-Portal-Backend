@@ -84,6 +84,9 @@ LOCAL_APPS = [
     'apps.uploads',
     'apps.analytics',
     'apps.blog',
+    'apps.services',
+    'apps.projects',
+    'apps.jobs',
     # 'apps.moderation',
     # 'apps.common',
 ]
@@ -397,7 +400,7 @@ JAZZMIN_SETTINGS = {
     "copyright": "tasknepal © 2024",
     
     # Search model in admin
-    "search_model": ["users.User", "tasks.Task", "bids.Bid"],
+    "search_model": ["users.User", "tasks.Task", "services.Service", "bids.Bid"],
     
     # User menu
     "user_avatar": None,
@@ -417,6 +420,7 @@ JAZZMIN_SETTINGS = {
         "dashboard",
         "users",
         "tasks",
+        "services",
         "bids",
         "reviews",
         "chat",
@@ -439,6 +443,7 @@ JAZZMIN_SETTINGS = {
         "dashboard": "fas fa-chart-line",
         "users": "fas fa-users",
         "tasks": "fas fa-tasks",
+        "services": "fas fa-concierge-bell",
         "bids": "fas fa-gavel",
         "reviews": "fas fa-star",
         "chat": "fas fa-comments",
@@ -467,6 +472,7 @@ JAZZMIN_SETTINGS = {
         # Tasks app models
         "tasks.Category": "fas fa-folder",
         "tasks.Task": "fas fa-clipboard-list",
+        "services.Service": "fas fa-briefcase",
         "tasks.TaskAttachment": "fas fa-paperclip",
         "tasks.TaskBookmark": "fas fa-bookmark",
         "tasks.TaskView": "fas fa-eye",

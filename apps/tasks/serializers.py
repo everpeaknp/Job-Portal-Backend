@@ -1,13 +1,40 @@
 """
 Serializers for Task models.
 """
+from decimal import Decimal
+
 from rest_framework import serializers
 from django.utils.text import slugify
 from .models import (
     Task, Category, TaskAttachment, TaskBookmark,
     TaskView, TaskQuestion, TaskReport
 )
+from apps.users.employer_profile_service import resolve_employer_image_url
+
+from .listing import (
+    LISTING_KIND_CHOICES,
+    get_listing_kind,
+    with_listing_kind,
+)
 from apps.users.serializers import UserListSerializer
+
+
+def _cover_attachment(task):
+    """First uploaded attachment — used as the listing cover image."""
+    prefetched = getattr(task, '_prefetched_objects_cache', {}).get('attachments')
+    if prefetched is not None:
+        if not prefetched:
+            return None
+        return min(prefetched, key=lambda item: item.uploaded_at)
+    return task.attachments.order_by('uploaded_at').first()
+
+
+def _ordered_attachments(task):
+    """Attachments in upload order (cover image first)."""
+    prefetched = getattr(task, '_prefetched_objects_cache', {}).get('attachments')
+    if prefetched is not None:
+        return sorted(prefetched, key=lambda item: item.uploaded_at)
+    return task.attachments.order_by('uploaded_at')
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -61,11 +88,73 @@ class TaskQuestionSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'asked_by', 'answered_at', 'created_at']
 
 
-class TaskListSerializer(serializers.ModelSerializer):
+def _get_owner_employer_profile(task):
+    owner = getattr(task, 'owner', None)
+    if not owner:
+        return None
+    return getattr(owner, 'employer_profile', None)
+
+
+def _resolve_owner_personal_name(owner):
+    if not owner:
+        return ''
+    full = (owner.get_full_name() or '').strip()
+    if full:
+        return full
+    if getattr(owner, 'username', None):
+        return owner.username
+    if getattr(owner, 'email', None):
+        return owner.email.split('@')[0]
+    return ''
+
+
+class TaskOwnerEmployerMixin:
+    """Business profile fields for task owners (employer accounts)."""
+
+    def get_owner_logo_url(self, obj):
+        profile = _get_owner_employer_profile(obj)
+        if not profile or not profile.logo_image:
+            return None
+        request = self.context.get('request')
+        if not request:
+            return None
+        return resolve_employer_image_url(request, profile.logo_image)
+
+    def get_owner_logo_text(self, obj):
+        profile = _get_owner_employer_profile(obj)
+        if profile and profile.logo_text.strip():
+            return profile.logo_text.strip()
+        owner = getattr(obj, 'owner', None)
+        company_name = profile.company_name.strip() if profile and profile.company_name else ''
+        seed = company_name or _resolve_owner_personal_name(owner)
+        parts = seed.split()
+        if len(parts) >= 2:
+            return ''.join(part[0] for part in parts[:2]).upper()
+        return (seed[:2] or 'CO').upper()
+
+    def get_owner_logo_color(self, obj):
+        profile = _get_owner_employer_profile(obj)
+        if profile and profile.logo_color:
+            return profile.logo_color
+        return 'serif-m'
+
+    def get_owner_business_name(self, obj):
+        profile = _get_owner_employer_profile(obj)
+        if profile and profile.company_name.strip():
+            return profile.company_name.strip()
+        return ''
+
+
+class TaskListSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
     """Lightweight serializer for task lists."""
     
     owner_name = serializers.SerializerMethodField()
+    owner_username = serializers.SerializerMethodField()
     owner_image = serializers.SerializerMethodField()
+    owner_logo_url = serializers.SerializerMethodField()
+    owner_logo_text = serializers.SerializerMethodField()
+    owner_logo_color = serializers.SerializerMethodField()
+    owner_business_name = serializers.SerializerMethodField()
     owner_rating = serializers.DecimalField(
         source='owner.average_rating',
         max_digits=3,
@@ -74,26 +163,39 @@ class TaskListSerializer(serializers.ModelSerializer):
     )
     owner_is_verified = serializers.SerializerMethodField()
     category_name = serializers.CharField(source='category.name', read_only=True)
+    listing_kind = serializers.SerializerMethodField()
+    primary_image = serializers.SerializerMethodField()
     is_open = serializers.BooleanField(read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
+
+    def get_listing_kind(self, obj):
+        return get_listing_kind(obj.tags)
+
+    def get_primary_image(self, obj):
+        attachment = _cover_attachment(obj)
+        if not attachment or not attachment.file_url:
+            return None
+        url = attachment.file_url
+        request = self.context.get('request')
+        if request and str(url).startswith('/'):
+            return request.build_absolute_uri(url)
+        return url
     
     def get_owner_name(self, obj):
         """
-        Best-effort display name for the task poster.
-        Falls back through full name -> username -> email local-part
-        so the UI never has to render an empty "Unknown".
+        Display name for the task poster on marketplace listings.
+        Prefer employer business profile company name over personal name.
         """
+        business_name = self.get_owner_business_name(obj)
+        if business_name:
+            return business_name
+        return _resolve_owner_personal_name(getattr(obj, 'owner', None))
+    
+    def get_owner_username(self, obj):
         owner = getattr(obj, 'owner', None)
         if not owner:
             return ''
-        full = (owner.get_full_name() or '').strip()
-        if full:
-            return full
-        if getattr(owner, 'username', None):
-            return owner.username
-        if getattr(owner, 'email', None):
-            return owner.email.split('@')[0]
-        return ''
+        return (getattr(owner, 'username', None) or '').strip()
     
     def get_owner_image(self, obj):
         """
@@ -127,8 +229,9 @@ class TaskListSerializer(serializers.ModelSerializer):
             # pins for each task. Without them every task falls back to the
             # frontend's default fallback coordinates.
             'latitude', 'longitude',
-            'category', 'category_name', 'owner', 'owner_name',
-            'owner_image', 'owner_rating', 'owner_is_verified', 'assigned_tasker', 'due_date',
+            'category', 'category_name', 'listing_kind', 'primary_image', 'owner', 'owner_name',
+            'owner_username', 'owner_image', 'owner_logo_url', 'owner_logo_text', 'owner_logo_color',
+            'owner_business_name', 'owner_rating', 'owner_is_verified', 'assigned_tasker', 'due_date',
             'is_open', 'is_overdue', 'views_count', 'bids_count', 'created_at'
         ]
         read_only_fields = [
@@ -136,19 +239,82 @@ class TaskListSerializer(serializers.ModelSerializer):
         ]
 
 
-class TaskDetailSerializer(serializers.ModelSerializer):
+class TaskDetailSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
     """Detailed serializer for task details."""
     
     owner = UserListSerializer(read_only=True)
     assigned_tasker = UserListSerializer(read_only=True)
     category = CategorySerializer(read_only=True)
-    attachments = TaskAttachmentSerializer(many=True, read_only=True)
+    owner_name = serializers.SerializerMethodField()
+    owner_username = serializers.SerializerMethodField()
+    owner_image = serializers.SerializerMethodField()
+    owner_logo_url = serializers.SerializerMethodField()
+    owner_logo_text = serializers.SerializerMethodField()
+    owner_logo_color = serializers.SerializerMethodField()
+    owner_business_name = serializers.SerializerMethodField()
+    owner_rating = serializers.DecimalField(
+        source='owner.average_rating',
+        max_digits=3,
+        decimal_places=2,
+        read_only=True,
+    )
+    owner_is_verified = serializers.SerializerMethodField()
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    primary_image = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
     questions = TaskQuestionSerializer(many=True, read_only=True)
     is_open = serializers.BooleanField(read_only=True)
     is_completed = serializers.BooleanField(read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
     full_address = serializers.CharField(read_only=True)
     is_bookmarked = serializers.SerializerMethodField()
+    listing_kind = serializers.SerializerMethodField()
+
+    def get_listing_kind(self, obj):
+        return get_listing_kind(obj.tags)
+
+    def get_primary_image(self, obj):
+        attachment = _cover_attachment(obj)
+        if not attachment or not attachment.file_url:
+            return None
+        url = attachment.file_url
+        request = self.context.get('request')
+        if request and str(url).startswith('/'):
+            return request.build_absolute_uri(url)
+        return url
+
+    def get_owner_name(self, obj):
+        business_name = self.get_owner_business_name(obj)
+        if business_name:
+            return business_name
+        return _resolve_owner_personal_name(getattr(obj, 'owner', None))
+
+    def get_owner_username(self, obj):
+        owner = getattr(obj, 'owner', None)
+        if not owner:
+            return ''
+        return (getattr(owner, 'username', None) or '').strip()
+
+    def get_owner_image(self, obj):
+        owner = getattr(obj, 'owner', None)
+        if not owner or not getattr(owner, 'profile_image', None):
+            return None
+        try:
+            url = owner.profile_image.url
+        except (ValueError, AttributeError):
+            return None
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(url)
+        return url
+
+    def get_owner_is_verified(self, obj):
+        owner = getattr(obj, 'owner', None)
+        return bool(owner and getattr(owner, 'is_verified_tasker', False))
+
+    def get_attachments(self, obj):
+        ordered = _ordered_attachments(obj)
+        return TaskAttachmentSerializer(ordered, many=True, context=self.context).data
     
     class Meta:
         model = Task
@@ -159,10 +325,13 @@ class TaskDetailSerializer(serializers.ModelSerializer):
             'postal_code', 'latitude', 'longitude', 'full_address',
             'due_date', 'start_date', 'completion_date',
             'tasker_marked_complete_at', 'owner_marked_complete_at',
-            'category', 'owner', 'assigned_tasker',
+            'category', 'category_name', 'owner', 'owner_name', 'owner_username', 'owner_image',
+            'owner_logo_url', 'owner_logo_text', 'owner_logo_color', 'owner_business_name',
+            'owner_rating', 'owner_is_verified', 'primary_image',
+            'assigned_tasker',
             'is_public', 'is_featured', 'allow_bids', 'auto_accept_bid',
             'views_count', 'bids_count', 'bookmarks_count',
-            'tags', 'requirements', 'attachments', 'questions',
+            'tags', 'requirements', 'listing_kind', 'attachments', 'questions',
             'is_open', 'is_completed', 'is_overdue', 'is_bookmarked',
             'created_at', 'updated_at', 'published_at'
         ]
@@ -183,6 +352,13 @@ class TaskDetailSerializer(serializers.ModelSerializer):
 
 class TaskCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating tasks."""
+
+    listing_kind = serializers.ChoiceField(
+        choices=[(kind, kind) for kind in LISTING_KIND_CHOICES],
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
     
     class Meta:
         model = Task
@@ -226,6 +402,25 @@ class TaskCreateSerializer(serializers.ModelSerializer):
             pass
 
         return value
+
+    def validate(self, attrs):
+        listing_kind = attrs.pop('listing_kind', None)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+
+        if listing_kind:
+            if listing_kind == 'service':
+                if user and user.role not in ('tasker', 'admin'):
+                    raise serializers.ValidationError(
+                        {'listing_kind': 'Only taskers can create service listings.'}
+                    )
+            elif listing_kind in ('project', 'job') and user and user.role == 'tasker':
+                raise serializers.ValidationError(
+                    {'listing_kind': 'Taskers cannot create project or job listings.'}
+                )
+            attrs['tags'] = with_listing_kind(attrs.get('tags'), listing_kind)
+
+        return attrs
     
     def create(self, validated_data):
         """Create task with owner; auto-geocode if coords are missing."""
@@ -289,6 +484,14 @@ class TaskUpdateSerializer(serializers.ModelSerializer):
             )
         return attrs
 
+    def update(self, instance, validated_data):
+        if 'tags' in validated_data:
+            validated_data['tags'] = with_listing_kind(
+                validated_data['tags'],
+                get_listing_kind(instance.tags),
+            )
+        return super().update(instance, validated_data)
+
 
 class TaskStatusSerializer(serializers.Serializer):
     """Serializer for updating task status."""
@@ -303,7 +506,7 @@ class TaskStatusSerializer(serializers.Serializer):
         # Define valid status transitions
         valid_transitions = {
             'draft': ['open', 'cancelled'],
-            'open': ['assigned', 'cancelled'],
+            'open': ['assigned', 'cancelled', 'completed'],
             'assigned': ['in_progress', 'open', 'cancelled'],
             'funded': ['in_progress', 'cancelled'],
             'in_progress': ['disputed', 'cancelled'],
@@ -317,6 +520,19 @@ class TaskStatusSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 f"Cannot transition from {current_status} to {value}."
             )
+
+        if value == 'completed' and current_status == 'open' and task.assigned_tasker_id:
+            raise serializers.ValidationError(
+                'Cannot mark as completed while a freelancer is assigned. '
+                'Confirm completion after work is in progress.'
+            )
+
+        if value == 'completed' and current_status == 'open':
+            if task.bids.filter(status='pending').exists():
+                raise serializers.ValidationError(
+                    'Cannot mark as completed while proposals are still pending. '
+                    'Accept or reject them first.'
+                )
         
         return value
 

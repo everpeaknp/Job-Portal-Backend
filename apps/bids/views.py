@@ -4,7 +4,7 @@ Views for Bid management.
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.db.models import Q, Avg, Sum, Count
 from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
@@ -108,6 +108,10 @@ class BidViewSet(viewsets.ModelViewSet):
     
     def get_permissions(self):
         """Set permissions based on action."""
+        if self.action == 'list':
+            task_id = self.request.query_params.get('task')
+            if task_id and Task.objects.filter(id=task_id, is_public=True).exists():
+                return [AllowAny()]
         if self.action == 'accept':
             return [IsAuthenticated(), CanAcceptBid()]
         elif self.action == 'reject':

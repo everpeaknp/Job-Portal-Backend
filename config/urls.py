@@ -52,7 +52,12 @@ urlpatterns = [
     # API v1 - Only enabled apps
     path('api/v1/auth/', include('apps.accounts.urls')),
     path('api/v1/users/', include('apps.users.urls')),
+    path('api/v1/employers/', include('apps.users.employer_urls')),
+    path('api/v1/freelancers/', include('apps.users.freelancer_urls')),
     path('api/v1/tasks/', include('apps.tasks.urls')),
+    path('api/v1/services/', include('apps.services.urls')),
+    path('api/v1/projects/', include('apps.projects.urls')),
+    path('api/v1/jobs/', include('apps.jobs.urls')),
     path('api/v1/bids/', include('apps.bids.urls')),
     path('api/v1/reviews/', include('apps.reviews.urls')),
     path('api/v1/chat/', include('apps.chat.urls')),

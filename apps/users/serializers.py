@@ -1,7 +1,9 @@
 """
 Serializers for User models.
 """
+import json
 import re
+from urllib.parse import unquote
 
 from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
@@ -18,6 +20,62 @@ def _short_city_label(value):
     value = re.sub(r'\s+metropolitan city$', '', value, flags=re.I)
     value = re.sub(r'\s+municipality$', '', value, flags=re.I)
     return value.strip()
+
+
+def _iter_prefetched_skills(user):
+    skills = getattr(user, '_prefetched_objects_cache', {}).get('skills')
+    if skills is not None:
+        return skills
+    return user.skills.all()
+
+
+def _parse_dashboard_profile_meta(skill):
+    """Decode META::profile dashboard profile metadata from a user skill."""
+    prefix = 'META::'
+    name = getattr(skill, 'name', '') or ''
+    if not name.startswith(prefix):
+        return {}
+
+    details = (getattr(skill, 'details', None) or '').strip()
+    if details:
+        try:
+            payload = json.loads(details)
+            if isinstance(payload, dict):
+                return payload
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    # Legacy: payload embedded in the name field.
+    rest = name[len(prefix) :]
+    separator = rest.find('::')
+    if separator < 0:
+        return {}
+    skill_id = rest[:separator]
+    if skill_id != 'profile':
+        return {}
+    encoded = rest[separator + 2 :]
+    try:
+        payload = json.loads(unquote(encoded))
+        return payload if isinstance(payload, dict) else {}
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
+def _profile_meta_from_user(user):
+    specialization = None
+    profile_type = None
+    for skill in _iter_prefetched_skills(user):
+        category = (skill.category or 'skill').lower()
+        if category != 'qualification':
+            continue
+        if not (skill.name or '').startswith('META::'):
+            continue
+        payload = _parse_dashboard_profile_meta(skill)
+        if not payload:
+            continue
+        specialization = payload.get('specialization') or specialization
+        profile_type = payload.get('profileType') or profile_type
+    return specialization, profile_type
 
 
 def _short_location_display(user):
@@ -42,7 +100,7 @@ class UserSkillSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserSkill
         fields = [
-            'id', 'name', 'category', 'proficiency_level',
+            'id', 'name', 'details', 'category', 'proficiency_level',
             'years_of_experience', 'verified', 'created_at'
         ]
         read_only_fields = ['id', 'verified', 'created_at']
@@ -324,11 +382,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'first_name', 'last_name', 'username', 'phone', 'date_of_birth', 'gender',
-            'bio', 'tagline', 'profile_image', 'cover_image',
+            'bio', 'tagline', 'profile_image', 'cover_image', 'role',
             'address', 'city', 'state', 'country', 'postal_code',
             'latitude', 'longitude', 'hourly_rate',
             'notification_enabled', 'email_notifications', 'sms_notifications', 'push_notifications'
         ]
+
+    def validate_role(self, value):
+        if value not in ('customer', 'tasker'):
+            raise serializers.ValidationError("Invalid role. Must be 'customer' or 'tasker'.")
+        return value
     
     def validate_phone(self, value):
         """Validate phone number format."""
@@ -500,6 +563,11 @@ class UserDirectorySerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(source='get_full_name', read_only=True)
     profile_image = serializers.SerializerMethodField()
     location_display = serializers.SerializerMethodField()
+    skill_tags = serializers.SerializerMethodField()
+    language_tags = serializers.SerializerMethodField()
+    specialization = serializers.SerializerMethodField()
+    profile_type = serializers.SerializerMethodField()
+    date_joined = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = User
@@ -518,6 +586,13 @@ class UserDirectorySerializer(serializers.ModelSerializer):
             'average_rating',
             'total_reviews',
             'tasks_completed',
+            'completion_rate',
+            'hourly_rate',
+            'skill_tags',
+            'language_tags',
+            'specialization',
+            'profile_type',
+            'date_joined',
             'is_verified_tasker',
             'is_online',
         ]
@@ -533,6 +608,33 @@ class UserDirectorySerializer(serializers.ModelSerializer):
 
     def get_location_display(self, obj):
         return _short_location_display(obj)
+
+    def get_skill_tags(self, obj):
+        tags = []
+        for skill in _iter_prefetched_skills(obj):
+            category = (skill.category or 'skill').lower()
+            if category == 'skill' and skill.name:
+                tags.append(skill.name)
+            if len(tags) >= 6:
+                break
+        return tags
+
+    def get_language_tags(self, obj):
+        tags = []
+        for skill in _iter_prefetched_skills(obj):
+            if (skill.category or '').lower() == 'language' and skill.name:
+                tags.append(skill.name)
+            if len(tags) >= 6:
+                break
+        return tags
+
+    def get_specialization(self, obj):
+        specialization, _ = _profile_meta_from_user(obj)
+        return specialization
+
+    def get_profile_type(self, obj):
+        _, profile_type = _profile_meta_from_user(obj)
+        return profile_type
 
 
 class TaskerPublicProfileSerializer(serializers.ModelSerializer):
@@ -581,8 +683,20 @@ class PublicProfileSerializer(TaskerPublicProfileSerializer):
         fields = TaskerPublicProfileSerializer.Meta.fields + [
             'first_name', 'last_name', 'display_name', 'location_display',
             'online_status', 'followers_count', 'following_count', 'is_following',
-            'transportation_tags', 'tasks_posted', 'role',
+            'transportation_tags', 'tasks_posted', 'role', 'gender',
+            'specialization', 'profile_type',
         ]
+
+    specialization = serializers.SerializerMethodField()
+    profile_type = serializers.SerializerMethodField()
+
+    def get_specialization(self, obj):
+        specialization, _ = _profile_meta_from_user(obj)
+        return specialization
+
+    def get_profile_type(self, obj):
+        _, profile_type = _profile_meta_from_user(obj)
+        return profile_type
 
     def get_display_name(self, obj):
         first = (obj.first_name or '').strip()
