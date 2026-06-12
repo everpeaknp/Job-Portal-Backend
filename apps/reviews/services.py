@@ -18,10 +18,13 @@ from apps.payments.models import Payment
 from apps.tasks.models import Task
 from apps.users.models import User
 
+from apps.tasks.listing import LISTING_KIND_SERVICE, get_listing_kind
+
 from .constants import (
     CUSTOMER_TO_TASKER_TAGS,
     REVIEWER_TYPE_CUSTOMER,
     REVIEWER_TYPE_TASKER,
+    REVIEW_TYPE_OWNER_TO_PROVIDER,
     TASKER_TO_CUSTOMER_TAGS,
     VISIBILITY_BOTH_SUBMITTED,
     VISIBILITY_DELAY_24H,
@@ -117,6 +120,79 @@ class ReviewService:
         ReviewService._check_rate_limit(reviewer, settings.rate_limit_per_hour)
 
         return reviewer_type
+
+    @staticmethod
+    def assert_can_review_service_listing(service: Task, reviewer: User) -> None:
+        """Allow authenticated users to review a public service listing without a completed order."""
+        if get_listing_kind(service.tags) != LISTING_KIND_SERVICE:
+            raise ReviewEligibilityError('This listing is not a service.')
+
+        if reviewer.id == service.owner_id:
+            raise ReviewEligibilityError('You cannot review your own service.')
+
+        if Review.objects.filter(task=service, reviewer=reviewer).exists():
+            raise ReviewEligibilityError('You have already submitted a review for this service.')
+
+        ReviewService._check_rate_limit(reviewer, ReviewService.get_settings().rate_limit_per_hour)
+
+    @staticmethod
+    @transaction.atomic
+    def create_service_listing_review(
+        *,
+        service: Task,
+        reviewer: User,
+        rating: int,
+        comment: str = '',
+        submitter_ip: str | None = None,
+        submitter_user_agent: str = '',
+    ) -> Review:
+        ReviewService.assert_can_review_service_listing(service, reviewer)
+
+        if not 1 <= rating <= 5:
+            raise ValidationError('Rating must be between 1 and 5.')
+
+        settings = ReviewService.get_settings()
+        now = timezone.now()
+        edit_window = settings.edit_window_minutes
+
+        review = Review(
+            task=service,
+            reviewer=reviewer,
+            reviewee=service.owner,
+            reviewer_type=REVIEWER_TYPE_CUSTOMER,
+            review_type=REVIEW_TYPE_OWNER_TO_PROVIDER,
+            overall_rating=rating,
+            review_text=(comment or '').strip(),
+            tags=[],
+            submitter_ip=submitter_ip,
+            submitter_user_agent=(submitter_user_agent or '')[:512],
+            is_verified=False,
+            is_approved=True,
+            is_public=True,
+            visible_at=now,
+            is_finalized=edit_window == 0,
+            finalized_at=now if edit_window == 0 else None,
+        )
+        review.save()
+
+        ReviewService._increment_rate_limit(reviewer)
+        ReviewService.update_user_profile_stats(service.owner)
+
+        try:
+            from apps.notifications.services import NotificationService
+
+            NotificationService.send_notification(
+                user=service.owner,
+                notification_type='review_received',
+                title='New review received',
+                message=f'{reviewer.get_full_name()} left you a {rating}-star review on your service.',
+                related_object=review,
+                data={'review_id': str(review.id), 'task_id': str(service.id), 'rating': rating},
+            )
+        except Exception as exc:
+            logger.warning('Service review notification failed: %s', exc)
+
+        return review
 
     @staticmethod
     def _check_rate_limit(user: User, limit_per_hour: int) -> None:
@@ -330,11 +406,21 @@ class ReviewService:
         )
 
     @staticmethod
+    def service_page_reviews_queryset(service: Task):
+        """All approved reviews for a service listing detail page."""
+        return Review.objects.filter(
+            task=service,
+            is_approved=True,
+            is_flagged=False,
+        )
+
+    @staticmethod
     def get_reviews_received(user: User, limit: int | None = None):
         qs = (
             ReviewService.public_reviews_queryset()
             .filter(reviewee=user)
             .select_related('reviewer', 'task')
+            .prefetch_related('helpful_votes', 'reports')
             .order_by('-created_at')
         )
         if limit:

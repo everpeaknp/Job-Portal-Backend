@@ -8,6 +8,7 @@ from django.conf.urls.static import static
 from django.views.generic import RedirectView
 
 from apps.analytics.admin_views import business_analytics_dashboard
+from apps.faq.views import FaqListAPIView
 from drf_spectacular.views import (
     SpectacularAPIView,
     SpectacularRedocView,
@@ -73,6 +74,8 @@ urlpatterns = [
     path('api/v1/uploads/', include('apps.uploads.urls')),
     path('api/v1/analytics/', include('apps.analytics.urls')),
     path('api/v1/blog/', include('apps.blog.urls')),
+    path('api/v1/faq/', FaqListAPIView.as_view(), name='api-faq-list'),
+    path('faq/', FaqListAPIView.as_view(), name='faq-list'),
 ]
 
 # Serve media files in development

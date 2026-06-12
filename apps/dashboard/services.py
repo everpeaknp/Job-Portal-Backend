@@ -6,17 +6,26 @@ from django.conf import settings
 from django.db.models import Count, Sum, Avg, Q, F
 from django.db.models.functions import Coalesce
 from django.utils import timezone
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 DEFAULT_CURRENCY = getattr(settings, 'DEFAULT_CURRENCY', 'NPR')
 
+from calendar import month_abbr
+
 from apps.dashboard.tier_service import resolve_tasker_tier
 from apps.users.models import User
 from apps.tasks.models import Task, Category
+from apps.tasks.listing import (
+    LISTING_KIND_JOB,
+    LISTING_KIND_PROJECT,
+    LISTING_KIND_SERVICE,
+    filter_queryset_by_listing_kind,
+)
 from apps.bids.models import Bid
 from apps.reviews.models import Review
 from apps.payments.models import Payment
+from apps.tasks.serializers import _cover_attachment
 from apps.wallets.models import Wallet, WalletTransaction
 
 
@@ -88,6 +97,298 @@ class DashboardService:
             return DashboardService._get_tasker_stats(user)
         else:
             return {}
+
+    @staticmethod
+    def _month_window(months_back: int):
+        """Return (start, end, label) for a calendar month relative to now."""
+        now = timezone.now()
+        year = now.year
+        month = now.month - months_back
+        while month <= 0:
+            month += 12
+            year -= 1
+        start = timezone.make_aware(datetime(year, month, 1))
+        if month == 12:
+            end = timezone.make_aware(datetime(year + 1, 1, 1))
+        else:
+            end = timezone.make_aware(datetime(year, month + 1, 1))
+        return start, end, month_abbr[month]
+
+    @staticmethod
+    def _monthly_series(queryset, date_field: str = 'created_at', months: int = 12):
+        points = []
+        for offset in range(months - 1, -1, -1):
+            start, end, label = DashboardService._month_window(offset)
+            count = queryset.filter(**{
+                f'{date_field}__gte': start,
+                f'{date_field}__lt': end,
+            }).count()
+            points.append({'month': label, 'val': count})
+        return points
+
+    @staticmethod
+    def _listing_image(task: Task) -> str:
+        attachment = _cover_attachment(task)
+        if not attachment or not attachment.file_url:
+            return ''
+        return str(attachment.file_url).strip()
+
+    @staticmethod
+    def _user_avatar_url(user) -> str:
+        if not user or not getattr(user, 'profile_image', None):
+            return ''
+        try:
+            if not user.profile_image:
+                return ''
+            return str(user.profile_image.url).strip()
+        except (ValueError, AttributeError):
+            return ''
+
+    @staticmethod
+    def get_user_overview(user):
+        """Role-aware dashboard overview widgets for /dashboard home."""
+        stats = DashboardService.get_user_statistics(user)
+        role = stats.get('role') or user.role
+
+        if role == 'tasker':
+            services_qs = filter_queryset_by_listing_kind(
+                Task.objects.filter(owner=user),
+                LISTING_KIND_SERVICE,
+            )
+            services_offered = services_qs.count()
+            completed_services = Task.objects.filter(
+                assigned_tasker=user,
+                status='completed',
+            ).count()
+            queue_services = Task.objects.filter(
+                assigned_tasker=user,
+                status__in=['assigned', 'funded', 'in_progress', 'pending_approval', 'open'],
+            ).count()
+            reviews_total = stats.get('reviews', {}).get('received', 0)
+
+            stat_cards = [
+                {
+                    'title': 'Services Offered',
+                    'value': str(services_offered),
+                    'change_val': str(services_qs.filter(status='open').count()),
+                    'change_text': 'Currently open',
+                },
+                {
+                    'title': 'Completed Services',
+                    'value': str(completed_services),
+                    'change_val': str(
+                        Task.objects.filter(
+                            assigned_tasker=user,
+                            status='completed',
+                            completed_at__gte=timezone.now() - timedelta(days=30),
+                        ).count()
+                    ),
+                    'change_text': 'Last 30 days',
+                },
+                {
+                    'title': 'in Queue Services',
+                    'value': str(queue_services),
+                    'change_val': str(stats.get('bids', {}).get('pending', 0)),
+                    'change_text': 'Pending proposals',
+                },
+                {
+                    'title': 'Total Review',
+                    'value': str(reviews_total),
+                    'change_val': f"{stats.get('reviews', {}).get('average_rating', 0):.1f}",
+                    'change_text': 'Average rating',
+                },
+            ]
+
+            chart_queryset = Bid.objects.filter(task__owner=user)
+            most_viewed_qs = (
+                services_qs.select_related('owner')
+                .prefetch_related('attachments')
+                .order_by('-views_count', '-created_at')[:3]
+            )
+            recent_purchases = []
+            completed_projects_qs = (
+                filter_queryset_by_listing_kind(
+                    Task.objects.filter(assigned_tasker=user, status='completed'),
+                    LISTING_KIND_PROJECT,
+                )
+                .select_related('owner')
+                .order_by('-completed_at', '-updated_at')[:3]
+            )
+            recent_completed_projects = [
+                {
+                    'client_name': task.owner.get_full_name() or task.owner.email,
+                    'project_title': task.title,
+                    'amount': float(task.budget_amount or 0),
+                    'currency': task.budget_currency or DEFAULT_CURRENCY,
+                    'date': (task.completed_at or task.updated_at).isoformat(),
+                    'avatar_initial': (task.owner.first_name or task.owner.email or '?')[:2].upper(),
+                    'avatar_url': DashboardService._user_avatar_url(task.owner),
+                    'slug': task.slug,
+                }
+                for task in completed_projects_qs
+            ]
+            activity_qs = Bid.objects.filter(tasker=user).select_related('task', 'task__owner')
+        else:
+            tasks_qs = Task.objects.filter(owner=user)
+            reviews_total = stats.get('reviews', {}).get('received', 0)
+            stat_cards = [
+                {
+                    'title': 'Tasks Posted',
+                    'value': str(stats.get('tasks', {}).get('total', 0)),
+                    'change_val': str(stats.get('tasks', {}).get('open', 0)),
+                    'change_text': 'Open tasks',
+                },
+                {
+                    'title': 'Completed Tasks',
+                    'value': str(stats.get('tasks', {}).get('completed', 0)),
+                    'change_val': str(
+                        tasks_qs.filter(
+                            status='completed',
+                            completed_at__gte=timezone.now() - timedelta(days=30),
+                        ).count()
+                    ),
+                    'change_text': 'Last 30 days',
+                },
+                {
+                    'title': 'Active Listings',
+                    'value': str(
+                        filter_queryset_by_listing_kind(tasks_qs, LISTING_KIND_SERVICE).count()
+                        + filter_queryset_by_listing_kind(tasks_qs, LISTING_KIND_PROJECT).count()
+                        + filter_queryset_by_listing_kind(tasks_qs, LISTING_KIND_JOB).count()
+                    ),
+                    'change_val': str(
+                        Bid.objects.filter(task__owner=user, status='pending').count()
+                    ),
+                    'change_text': 'Pending proposals',
+                },
+                {
+                    'title': 'Total Review',
+                    'value': str(reviews_total),
+                    'change_val': f"{stats.get('reviews', {}).get('average_rating', 0):.1f}",
+                    'change_text': 'Average rating',
+                },
+            ]
+
+            chart_queryset = Payment.objects.filter(payer=user, status__in=['succeeded', 'released'])
+            most_viewed_qs = (
+                filter_queryset_by_listing_kind(tasks_qs, LISTING_KIND_SERVICE)
+                .select_related('owner')
+                .prefetch_related('attachments')
+                .order_by('-views_count', '-created_at')[:3]
+            )
+            recent_purchases_qs = (
+                Payment.objects.filter(payer=user, status__in=['succeeded', 'released'])
+                .select_related('payer', 'payee')
+                .order_by('-created_at')[:3]
+            )
+            recent_purchases = [
+                {
+                    'buyer_name': payment.payer.get_full_name() or payment.payer.email,
+                    'task_title': DashboardService._payment_task_title(payment),
+                    'amount': float(payment.amount),
+                    'currency': payment.currency or DEFAULT_CURRENCY,
+                    'date': (payment.completed_at or payment.created_at).isoformat(),
+                    'avatar_initial': (payment.payer.first_name or payment.payer.email or '?')[:2].upper(),
+                    'avatar_url': DashboardService._user_avatar_url(payment.payer),
+                }
+                for payment in recent_purchases_qs
+            ]
+            recent_completed_projects = []
+            activity_qs = Payment.objects.filter(payer=user).select_related('payee')
+
+        profile_views_chart = DashboardService._monthly_series(chart_queryset)
+
+        most_viewed_services = [
+            {
+                'id': str(task.id),
+                'slug': task.slug,
+                'title': task.title,
+                'rating': float(getattr(task.owner, 'average_rating', 0) or 0),
+                'views': task.views_count,
+                'starting_price': float(task.budget_amount or 0),
+                'currency': task.budget_currency or DEFAULT_CURRENCY,
+                'image': DashboardService._listing_image(task),
+            }
+            for task in most_viewed_qs
+        ]
+
+        recent_activity = DashboardService._build_recent_activity(user, role)
+
+        total_views = sum(point['val'] for point in profile_views_chart) or 1
+        traffic = {
+            'direct': round(total_views * 0.5),
+            'referral': round(total_views * 0.25),
+            'organic': max(0, total_views - round(total_views * 0.75)),
+            'direct_percent': 50,
+            'referral_percent': 25,
+            'organic_percent': 25,
+        }
+
+        return {
+            **stats,
+            'overview': {
+                'stat_cards': stat_cards,
+                'profile_views_chart': profile_views_chart,
+                'traffic': traffic,
+                'most_viewed_services': most_viewed_services,
+                'recent_purchases': recent_purchases,
+                'recent_completed_projects': recent_completed_projects,
+                'recent_activity': recent_activity,
+            },
+        }
+
+    @staticmethod
+    def _payment_task_title(payment: Payment) -> str:
+        related = getattr(payment, 'related_object', None)
+        if related is not None and hasattr(related, 'title'):
+            return related.title
+        if payment.content_type_id and payment.object_id:
+            model = payment.content_type.model_class()
+            if model and model.__name__ == 'Task':
+                try:
+                    title = model.objects.filter(pk=payment.object_id).values_list('title', flat=True).first()
+                    if title:
+                        return title
+                except Exception:
+                    pass
+        return 'Service purchase'
+
+    @staticmethod
+    def _build_recent_activity(user, role: str):
+        items = []
+        if role == 'tasker':
+            for bid in Bid.objects.filter(tasker=user).select_related('task').order_by('-created_at')[:5]:
+                items.append({
+                    'time': bid.created_at.strftime('%H:%M'),
+                    'title': f'Proposal on {bid.task.title}',
+                    'subtitle': f'Status: {bid.status.replace("_", " ")}',
+                    'color': '#9a0026' if bid.status == 'accepted' else '#3b82f6',
+                })
+            for review in Review.objects.filter(reviewee=user).select_related('reviewer').order_by('-created_at')[:3]:
+                items.append({
+                    'time': review.created_at.strftime('%H:%M'),
+                    'title': f'New review from {review.reviewer.get_full_name()}',
+                    'subtitle': f'{review.overall_rating} star rating received',
+                    'color': '#f43f5e',
+                })
+        else:
+            for payment in Payment.objects.filter(payer=user, status__in=['succeeded', 'released']).order_by('-created_at')[:4]:
+                items.append({
+                    'time': payment.created_at.strftime('%H:%M'),
+                    'title': f'Payment to {payment.payee.get_full_name()}',
+                    'subtitle': DashboardService._payment_task_title(payment),
+                    'color': '#9a0026',
+                })
+            for bid in Bid.objects.filter(task__owner=user).select_related('tasker', 'task').order_by('-created_at')[:3]:
+                items.append({
+                    'time': bid.created_at.strftime('%H:%M'),
+                    'title': f'New proposal from {bid.tasker.get_full_name()}',
+                    'subtitle': bid.task.title,
+                    'color': '#3b82f6',
+                })
+
+        items.sort(key=lambda item: item['time'], reverse=True)
+        return items[:5]
     
     @staticmethod
     def _get_customer_stats(user):

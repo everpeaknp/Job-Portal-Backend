@@ -99,9 +99,10 @@ class JobViewSet(viewsets.ModelViewSet):
 
 
         return queryset.select_related(
-
-            'owner', 'category', 'assigned_tasker'
-
+            'owner',
+            'owner__employer_profile',
+            'category',
+            'assigned_tasker',
         ).prefetch_related('attachments', 'questions', 'questions__asked_by')
 
 
@@ -208,7 +209,7 @@ class JobViewSet(viewsets.ModelViewSet):
 
             Job.objects.filter(owner=request.user)
 
-            .select_related('owner', 'category')
+            .select_related('owner', 'owner__employer_profile', 'category')
 
             .prefetch_related('attachments')
 

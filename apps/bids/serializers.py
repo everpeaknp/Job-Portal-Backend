@@ -5,7 +5,7 @@ from rest_framework import serializers
 from django.utils import timezone
 from .models import Bid, BidMessage, BidReview, BidNotification
 from apps.users.serializers import UserListSerializer
-from apps.tasks.serializers import TaskListSerializer
+from apps.tasks.serializers import TaskListSerializer, TaskOwnerEmployerMixin
 from apps.tasks.listing import get_listing_kind
 
 
@@ -35,7 +35,7 @@ class BidReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'reviewer', 'created_at']
 
 
-class BidListSerializer(serializers.ModelSerializer):
+class BidListSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
     """Lightweight serializer for bid lists."""
     
     tasker = UserListSerializer(read_only=True)
@@ -43,6 +43,10 @@ class BidListSerializer(serializers.ModelSerializer):
     task_slug = serializers.CharField(source='task.slug', read_only=True)
     task_city = serializers.CharField(source='task.city', read_only=True, allow_blank=True)
     task_listing_kind = serializers.SerializerMethodField()
+    task_owner_logo_url = serializers.SerializerMethodField()
+    task_owner_logo_text = serializers.SerializerMethodField()
+    task_owner_logo_color = serializers.SerializerMethodField()
+    task_owner_business_name = serializers.SerializerMethodField()
     is_pending = serializers.BooleanField(read_only=True)
     is_accepted = serializers.BooleanField(read_only=True)
     
@@ -50,6 +54,8 @@ class BidListSerializer(serializers.ModelSerializer):
         model = Bid
         fields = [
             'id', 'task', 'task_title', 'task_slug', 'task_city', 'task_listing_kind', 'tasker',
+            'task_owner_logo_url', 'task_owner_logo_text', 'task_owner_logo_color',
+            'task_owner_business_name',
             'amount', 'currency',
             'proposal', 'estimated_duration', 'estimated_completion_date',
             'status', 'is_pending', 'is_accepted', 'is_counter_offer',
@@ -60,12 +66,27 @@ class BidListSerializer(serializers.ModelSerializer):
     def get_task_listing_kind(self, obj):
         return get_listing_kind(obj.task.tags)
 
+    def get_task_owner_logo_url(self, obj):
+        return self.get_owner_logo_url(obj.task)
+
+    def get_task_owner_logo_text(self, obj):
+        return self.get_owner_logo_text(obj.task)
+
+    def get_task_owner_logo_color(self, obj):
+        return self.get_owner_logo_color(obj.task)
+
+    def get_task_owner_business_name(self, obj):
+        return self.get_owner_business_name(obj.task)
+
 
 class BidDetailSerializer(serializers.ModelSerializer):
     """Detailed serializer for bid details."""
     
     tasker = UserListSerializer(read_only=True)
     task = TaskListSerializer(read_only=True)
+    task_title = serializers.CharField(source='task.title', read_only=True)
+    task_slug = serializers.CharField(source='task.slug', read_only=True)
+    task_listing_kind = serializers.SerializerMethodField()
     messages = BidMessageSerializer(many=True, read_only=True)
     review = BidReviewSerializer(read_only=True)
     counter_offers = serializers.SerializerMethodField()
@@ -76,8 +97,8 @@ class BidDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Bid
         fields = [
-            'id', 'task', 'tasker', 'amount', 'currency',
-            'proposal', 'cover_letter', 'estimated_duration',
+            'id', 'task', 'task_title', 'task_slug', 'task_listing_kind', 'tasker',
+            'amount', 'currency', 'proposal', 'cover_letter', 'estimated_duration',
             'estimated_completion_date', 'status', 'attachments',
             'is_counter_offer', 'original_bid', 'counter_offers',
             'rejection_reason', 'withdrawal_reason',
@@ -95,6 +116,9 @@ class BidDetailSerializer(serializers.ModelSerializer):
         if obj.counter_offers.exists():
             return BidListSerializer(obj.counter_offers.all(), many=True).data
         return []
+
+    def get_task_listing_kind(self, obj):
+        return get_listing_kind(obj.task.tags)
 
 
 class BidCreateSerializer(serializers.ModelSerializer):

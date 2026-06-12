@@ -2,7 +2,7 @@
 from django.db.models import Q
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
@@ -33,7 +33,7 @@ class ServiceViewSet(viewsets.ModelViewSet):
     lookup_field = 'slug'
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['title', 'description', 'city', 'tags']
-    ordering_fields = ['created_at', 'budget_amount', 'bids_count']
+    ordering_fields = ['created_at', 'budget_amount', 'bids_count', 'views_count']
     filterset_fields = ['status', 'category', 'work_type', 'location_type', 'city', 'country']
 
     def get_queryset(self):
@@ -94,6 +94,47 @@ class ServiceViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
+
+    @action(detail=True, methods=['get', 'post'], url_path='reviews')
+    def reviews(self, request, slug=None):
+        """
+        GET  /api/v1/services/{slug}/reviews/ — public reviews on this service listing.
+        POST /api/v1/services/{slug}/reviews/ — authenticated users may review without a completed order.
+        """
+        from apps.reviews.serializers import (
+            ReviewDetailSerializer,
+            ReviewListSerializer,
+            ServiceReviewCreateSerializer,
+        )
+        from apps.reviews.services import ReviewService
+
+        service = self.get_object()
+
+        if request.method == 'POST':
+            if not request.user.is_authenticated:
+                return Response(
+                    {'detail': 'Authentication credentials were not provided.'},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            serializer = ServiceReviewCreateSerializer(
+                data=request.data,
+                context={'request': request, 'service': service},
+            )
+            serializer.is_valid(raise_exception=True)
+            review = serializer.save()
+            return Response(
+                ReviewDetailSerializer(review, context={'request': request}).data,
+                status=status.HTTP_201_CREATED,
+            )
+
+        qs = ReviewService.service_page_reviews_queryset(service).select_related(
+            'reviewer', 'reviewee',
+        ).prefetch_related('helpful_votes', 'reports')
+        return Response({
+            'task_id': str(service.id),
+            'count': qs.count(),
+            'results': ReviewListSerializer(qs, many=True, context={'request': request}).data,
+        })
 
     @action(detail=False, methods=['get'], url_path='mine')
     def mine(self, request):

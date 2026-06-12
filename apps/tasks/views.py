@@ -151,7 +151,7 @@ class TaskViewSet(viewsets.ModelViewSet):
         task = self.get_object()
         qs = ReviewService.public_reviews_queryset().filter(task=task).select_related(
             'reviewer', 'reviewee',
-        )
+        ).prefetch_related('helpful_votes', 'reports')
         return Response({
             'task_id': str(task.id),
             'count': qs.count(),

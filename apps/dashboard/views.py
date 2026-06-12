@@ -69,6 +69,14 @@ class DashboardViewSet(viewsets.ViewSet):
         return Response(serializer.data)
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticatedUser])
+    def my_overview(self, request):
+        """
+        Dashboard home widgets for the current user (employer or freelancer).
+        """
+        data = DashboardService.get_user_overview(request.user)
+        return Response(data)
+
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticatedUser])
     @extend_schema(tags=['Dashboard'], responses={200: UserStatisticsSerializer})
     def my_stats(self, request):
         """

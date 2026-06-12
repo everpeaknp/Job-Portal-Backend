@@ -9,6 +9,7 @@ from apps.tasks.listing import LISTING_KIND_SERVICE, with_listing_kind
 
 from .meta import parse_service_meta
 from .models import Service
+from .service_image_seed import seed_service_cover_images
 
 
 @admin.register(Service)
@@ -87,7 +88,12 @@ class ServiceAdmin(admin.ModelAdmin):
         }),
     )
 
-    actions = ['publish_services', 'feature_services', 'unfeature_services']
+    actions = [
+        'publish_services',
+        'feature_services',
+        'unfeature_services',
+        'seed_random_images',
+    ]
 
     @admin.display(description='Service meta')
     def service_meta_preview(self, obj):
@@ -118,3 +124,14 @@ class ServiceAdmin(admin.ModelAdmin):
     def unfeature_services(self, request, queryset):
         count = queryset.update(is_featured=False)
         self.message_user(request, f'{count} service(s) unfeatured.')
+
+    @admin.action(description='Seed random cover images (skips services that already have one)')
+    def seed_random_images(self, request, queryset):
+        created, skipped = seed_service_cover_images(
+            queryset.select_related('owner').prefetch_related('attachments'),
+            only_missing=True,
+        )
+        self.message_user(
+            request,
+            f'{created} cover image(s) added. {skipped} service(s) skipped (already had images or invalid).',
+        )

@@ -11,6 +11,7 @@ import logging
 
 from .models import Bid
 from apps.tasks.models import Task, TaskActivity
+from apps.tasks.listing import LISTING_KIND_JOB, get_listing_kind
 from apps.chat.conversation_resolver import get_or_create_conversation
 from apps.notifications.services import NotificationService
 from apps.payments.services import EscrowService
@@ -87,10 +88,19 @@ class BidWorkflowService:
             
             logger.info(f"Accepting bid {bid_id} for task {task.id}")
 
-            # 2. Validate wallet balance and create escrow (hold funds from owner wallet)
-            EscrowService.validate_owner_wallet_for_acceptance(bid)
-            payment = EscrowService.create_escrow_on_bid_acceptance(bid)
-            logger.info(f"Created escrow payment {payment.id} for {payment.currency} {payment.amount}")
+            listing_kind = get_listing_kind(task.tags)
+            skip_escrow = listing_kind == LISTING_KIND_JOB
+
+            # 2. Wallet escrow (skipped for job applications — hiring without upfront hold)
+            payment = None
+            if skip_escrow:
+                logger.info(f"Skipping escrow for job listing bid {bid_id}")
+            else:
+                EscrowService.validate_owner_wallet_for_acceptance(bid)
+                payment = EscrowService.create_escrow_on_bid_acceptance(bid)
+                logger.info(
+                    f"Created escrow payment {payment.id} for {payment.currency} {payment.amount}"
+                )
             
             # 3. Update bid status
             bid.status = 'accepted'
@@ -99,7 +109,7 @@ class BidWorkflowService:
             
             # 4. Assign provider to task and update status
             task.assigned_tasker = bid.tasker
-            task.status = 'funded'
+            task.status = 'assigned' if skip_escrow else 'funded'
             task.save(update_fields=['assigned_tasker', 'status'])
             
             # 5. Reject all other pending bids
@@ -158,13 +168,31 @@ class BidWorkflowService:
             conv_id = str(conversation.id)
             task_id_str = str(task.id)
             bid_id_str = str(bid.id)
-            payment_id_str = str(payment.id)
+            payment_id_str = str(payment.id) if payment else None
             task_title = task.title
             owner_name = task_owner.get_full_name()
             tasker_name = accepted_tasker.get_full_name()
-            pay_currency = payment.currency
-            pay_amount = payment.amount
+            pay_currency = payment.currency if payment else bid.currency
+            pay_amount = payment.amount if payment else bid.amount
             bid_amount = bid.amount
+
+            if skip_escrow:
+                tasker_accept_message = (
+                    f'{owner_name} accepted your application for "{task_title}".'
+                )
+                owner_accept_message = (
+                    f'You accepted {tasker_name}\'s application for "{task_title}".'
+                )
+            else:
+                tasker_accept_message = (
+                    f'{owner_name} accepted your bid of '
+                    f'{format_currency(bid_amount, bid.currency)} '
+                    f'for "{task_title}". Payment is now in escrow.'
+                )
+                owner_accept_message = (
+                    f'You accepted {tasker_name}\'s bid. Payment of '
+                    f'{pay_currency} {pay_amount} is now in escrow.'
+                )
 
             def send_acceptance_notifications():
                 try:
@@ -173,11 +201,7 @@ class BidWorkflowService:
                         sender=task_owner,
                         notification_type='bid_accepted',
                         title='Your bid was accepted',
-                        message=(
-                            f'{owner_name} accepted your bid of '
-                            f'{format_currency(bid_amount, bid.currency)} '
-                            f'for "{task_title}". Payment is now in escrow.'
-                        ),
+                        message=tasker_accept_message,
                         related_object=bid,
                         data={
                             'task_id': task_id_str,
@@ -199,23 +223,23 @@ class BidWorkflowService:
                             related_object=rej_bid,
                             data={'task_id': task_id_str, 'bid_id': rej_bid_id},
                         )
+                    owner_notification_data = {
+                        'task_id': task_id_str,
+                        'bid_id': bid_id_str,
+                        'conversation_id': conv_id,
+                        'action_url': f'/message?conversation={conv_id}',
+                    }
+                    if payment_id_str:
+                        owner_notification_data['payment_id'] = payment_id_str
+
                     NotificationService.send_notification(
                         user=task_owner,
                         sender=accepted_tasker,
                         notification_type='bid_accepted',
                         title='Bid accepted successfully',
-                        message=(
-                            f'You accepted {tasker_name}\'s bid. Payment of '
-                            f'{pay_currency} {pay_amount} is now in escrow.'
-                        ),
+                        message=owner_accept_message,
                         related_object=task,
-                        data={
-                            'task_id': task_id_str,
-                            'bid_id': bid_id_str,
-                            'payment_id': payment_id_str,
-                            'conversation_id': conv_id,
-                            'action_url': f'/message?conversation={conv_id}',
-                        },
+                        data=owner_notification_data,
                     )
                 except Exception as notify_err:
                     logger.error(

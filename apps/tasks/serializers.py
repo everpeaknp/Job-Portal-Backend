@@ -29,6 +29,19 @@ def _cover_attachment(task):
     return task.attachments.order_by('uploaded_at').first()
 
 
+def _resolve_primary_image_url(task, request=None):
+    """Cover image URL from attachments, or a stable stock placeholder."""
+    attachment = _cover_attachment(task)
+    if attachment and attachment.file_url:
+        url = str(attachment.file_url).strip()
+        if url and request and url.startswith('/'):
+            return request.build_absolute_uri(url)
+        if url:
+            return url
+    seed = task.slug or str(task.pk)
+    return f'https://picsum.photos/seed/{seed}/800/600'
+
+
 def _ordered_attachments(task):
     """Attachments in upload order (cover image first)."""
     prefetched = getattr(task, '_prefetched_objects_cache', {}).get('attachments')
@@ -172,15 +185,8 @@ class TaskListSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
         return get_listing_kind(obj.tags)
 
     def get_primary_image(self, obj):
-        attachment = _cover_attachment(obj)
-        if not attachment or not attachment.file_url:
-            return None
-        url = attachment.file_url
-        request = self.context.get('request')
-        if request and str(url).startswith('/'):
-            return request.build_absolute_uri(url)
-        return url
-    
+        return _resolve_primary_image_url(obj, self.context.get('request'))
+
     def get_owner_name(self, obj):
         """
         Display name for the task poster on marketplace listings.
@@ -232,7 +238,7 @@ class TaskListSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
             'category', 'category_name', 'listing_kind', 'primary_image', 'owner', 'owner_name',
             'owner_username', 'owner_image', 'owner_logo_url', 'owner_logo_text', 'owner_logo_color',
             'owner_business_name', 'owner_rating', 'owner_is_verified', 'assigned_tasker', 'due_date',
-            'is_open', 'is_overdue', 'views_count', 'bids_count', 'created_at'
+            'is_public', 'is_open', 'is_overdue', 'views_count', 'bids_count', 'created_at'
         ]
         read_only_fields = [
             'id', 'slug', 'owner', 'views_count', 'bids_count', 'created_at'
@@ -274,14 +280,7 @@ class TaskDetailSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
         return get_listing_kind(obj.tags)
 
     def get_primary_image(self, obj):
-        attachment = _cover_attachment(obj)
-        if not attachment or not attachment.file_url:
-            return None
-        url = attachment.file_url
-        request = self.context.get('request')
-        if request and str(url).startswith('/'):
-            return request.build_absolute_uri(url)
-        return url
+        return _resolve_primary_image_url(obj, self.context.get('request'))
 
     def get_owner_name(self, obj):
         business_name = self.get_owner_business_name(obj)

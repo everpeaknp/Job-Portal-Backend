@@ -70,7 +70,13 @@ class BidViewSet(viewsets.ModelViewSet):
         - Admins see all bids
         """
         user = self.request.user
-        base = Bid.objects.select_related('task', 'tasker', 'original_bid')
+        base = Bid.objects.select_related(
+            'task',
+            'tasker',
+            'original_bid',
+            'task__owner',
+            'task__owner__employer_profile',
+        )
 
         if getattr(user, 'is_admin', False):
             return base.all()
@@ -170,7 +176,9 @@ class BidViewSet(viewsets.ModelViewSet):
                 'data': {
                     'bid_id': str(result['bid'].id),
                     'task_id': str(result['task'].id),
-                    'payment_id': str(result['payment'].id),
+                    'payment_id': (
+                        str(result['payment'].id) if result.get('payment') else None
+                    ),
                     'conversation_id': str(result['conversation'].id),
                     'rejected_bids_count': result['rejected_bids_count']
                 }
@@ -314,10 +322,10 @@ class BidViewSet(viewsets.ModelViewSet):
         
         page = self.paginate_queryset(bids)
         if page is not None:
-            serializer = BidListSerializer(page, many=True)
+            serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
         
-        serializer = BidListSerializer(bids, many=True)
+        serializer = self.get_serializer(bids, many=True)
         return Response(serializer.data)
     
     @action(detail=False, methods=['get'])
@@ -336,10 +344,10 @@ class BidViewSet(viewsets.ModelViewSet):
         
         page = self.paginate_queryset(bids)
         if page is not None:
-            serializer = BidListSerializer(page, many=True)
+            serializer = self.get_serializer(page, many=True)
             return self.get_paginated_response(serializer.data)
         
-        serializer = BidListSerializer(bids, many=True)
+        serializer = self.get_serializer(bids, many=True)
         return Response(serializer.data)
     
     @action(detail=False, methods=['get'])

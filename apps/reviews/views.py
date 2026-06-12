@@ -13,8 +13,10 @@ from .models import Review, ReviewInvitation
 from .serializers import (
     ReviewCreateSerializer,
     ReviewDetailSerializer,
+    ReviewHelpfulVoteSerializer,
     ReviewInvitationSerializer,
     ReviewListSerializer,
+    ReviewReportCreateSerializer,
     ReviewRespondSerializer,
     UserReviewStatsSerializer,
 )
@@ -77,7 +79,7 @@ class ReviewViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         return ReviewService.public_reviews_queryset().select_related(
             'task', 'reviewer', 'reviewee',
-        )
+        ).prefetch_related('helpful_votes', 'reports')
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -111,9 +113,11 @@ class ReviewViewSet(viewsets.ReadOnlyModelViewSet):
             invitee=request.user,
             status='pending',
             expires_at__gt=__import__('django').utils.timezone.now(),
-        ).select_related('task')
+        ).select_related('task', 'task__owner', 'task__assigned_tasker')
         return Response(
-            ReviewInvitationSerializer(invitations, many=True).data,
+            ReviewInvitationSerializer(
+                invitations, many=True, context={'request': request},
+            ).data,
         )
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
@@ -155,3 +159,40 @@ class ReviewViewSet(viewsets.ReadOnlyModelViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(ReviewDetailSerializer(review).data)
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated], url_path='helpful')
+    def helpful(self, request, pk=None):
+        review = get_object_or_404(
+            ReviewService.public_reviews_queryset().prefetch_related('helpful_votes'),
+            pk=pk,
+        )
+        serializer = ReviewHelpfulVoteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        vote_action = serializer.validated_data['vote']
+        if vote_action == 'clear':
+            review.helpful_votes.filter(user=request.user).delete()
+        else:
+            from .models import ReviewHelpful
+
+            ReviewHelpful.objects.update_or_create(
+                review=review,
+                user=request.user,
+                defaults={'is_helpful': vote_action == 'helpful'},
+            )
+        review = ReviewService.public_reviews_queryset().prefetch_related(
+            'helpful_votes', 'reports',
+        ).get(pk=pk)
+        return Response(
+            ReviewListSerializer(review, context={'request': request}).data,
+        )
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated], url_path='report')
+    def report(self, request, pk=None):
+        review = get_object_or_404(ReviewService.public_reviews_queryset(), pk=pk)
+        serializer = ReviewReportCreateSerializer(
+            data=request.data,
+            context={'request': request, 'review': review},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({'detail': 'Review reported for moderation.'}, status=status.HTTP_201_CREATED)

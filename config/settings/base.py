@@ -84,6 +84,7 @@ LOCAL_APPS = [
     'apps.uploads',
     'apps.analytics',
     'apps.blog',
+    'apps.faq',
     'apps.services',
     'apps.projects',
     'apps.jobs',

@@ -1,6 +1,8 @@
 """Employer profile API — dashboard editing and public pages."""
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -166,6 +168,76 @@ class EmployerGalleryDetailView(APIView):
         image.image.delete(save=False)
         image.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class EmployerDirectoryPagination(PageNumberPagination):
+    page_size = 8
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
+class EmployerPublicListView(APIView):
+    """GET /api/v1/employers/ — public employer directory."""
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        queryset = (
+            EmployerProfile.objects.filter(
+                is_public=True,
+                user__is_active=True,
+                user__account_suspended=False,
+                user__role='customer',
+            )
+            .select_related('user')
+            .prefetch_related('gallery_images')
+        )
+
+        search = (request.query_params.get('search') or '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(company_name__icontains=search)
+                | Q(industry__icontains=search)
+                | Q(user__tagline__icontains=search)
+                | Q(user__bio__icontains=search)
+                | Q(user__city__icontains=search)
+                | Q(user__username__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+            )
+
+        industry = (request.query_params.get('industry') or '').strip()
+        if industry and industry.lower() != 'all':
+            if industry == 'Individual':
+                queryset = queryset.filter(account_type='individual')
+            else:
+                queryset = queryset.filter(industry__iexact=industry)
+
+        team_size = (request.query_params.get('team_size') or '').strip()
+        if team_size and team_size.lower() != 'all':
+            queryset = queryset.filter(team_size=team_size)
+
+        ordering = (request.query_params.get('ordering') or 'best-seller').strip()
+        if ordering == 'review-count':
+            queryset = queryset.order_by('-user__total_reviews', '-user__average_rating', 'company_name')
+        elif ordering == 'open-jobs':
+            queryset = queryset.annotate(
+                open_jobs_count=Count(
+                    'user__posted_tasks',
+                    filter=Q(
+                        user__posted_tasks__is_public=True,
+                        user__posted_tasks__status='open',
+                        user__posted_tasks__tags__icontains='listing:job',
+                    ),
+                )
+            ).order_by('-open_jobs_count', '-user__average_rating', 'company_name')
+        else:
+            queryset = queryset.order_by('-user__average_rating', '-user__total_reviews', 'company_name')
+
+        paginator = EmployerDirectoryPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = EmployerPublicProfileSerializer(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
 
 
 class EmployerPublicDetailView(APIView):

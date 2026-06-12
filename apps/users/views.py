@@ -194,14 +194,17 @@ class UserViewSet(viewsets.ModelViewSet):
     
     @action(detail=True, methods=['get'], permission_classes=[AllowAny])
     def public_profile(self, request, pk=None):
-        """Get public profile of a tasker."""
-        user = self.get_object()
-        if user.role != 'tasker':
-            return Response({
-                'error': 'This user is not a tasker.'
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        serializer = TaskerPublicProfileSerializer(user, context={'request': request})
+        """Get public profile by user id (skills, badges, bio — same as profile by slug)."""
+        user = (
+            User.objects.filter(is_active=True)
+            .filter(pk=pk)
+            .prefetch_related('skills', 'badges')
+            .first()
+        )
+        if not user:
+            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = PublicProfileSerializer(user, context={'request': request})
         return Response(serializer.data)
 
     @action(
