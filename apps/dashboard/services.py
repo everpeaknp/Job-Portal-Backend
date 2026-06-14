@@ -12,10 +12,12 @@ from decimal import Decimal
 DEFAULT_CURRENCY = getattr(settings, 'DEFAULT_CURRENCY', 'NPR')
 
 from calendar import month_abbr
+from urllib.parse import urlparse
 
 from apps.dashboard.tier_service import resolve_tasker_tier
 from apps.users.models import User
 from apps.tasks.models import Task, Category
+from apps.tasks.models import TaskView
 from apps.tasks.listing import (
     LISTING_KIND_JOB,
     LISTING_KIND_PROJECT,
@@ -115,6 +117,119 @@ class DashboardService:
         return start, end, month_abbr[month]
 
     @staticmethod
+    def _monthly_view_series(task_ids, months: int = 12):
+        """Monthly listing view counts from TaskView rows."""
+        points = []
+        for offset in range(months - 1, -1, -1):
+            start, end, label = DashboardService._month_window(offset)
+            if not task_ids:
+                count = 0
+            else:
+                count = TaskView.objects.filter(
+                    task_id__in=task_ids,
+                    viewed_at__gte=start,
+                    viewed_at__lt=end,
+                ).count()
+            points.append({'month': label, 'val': count})
+        return points
+
+    @staticmethod
+    def _classify_traffic_source(referrer, user_agent: str = '') -> str:
+        """Classify a view into direct, referral, or organic traffic."""
+        ref = (referrer or '').lower().strip()
+        ua = (user_agent or '').lower()
+
+        search_hosts = (
+            'google.',
+            'bing.',
+            'yahoo.',
+            'duckduckgo.',
+            'baidu.',
+            'yandex.',
+            'ecosia.',
+            'search.',
+        )
+        social_hosts = (
+            'facebook.',
+            'fb.com',
+            'twitter.',
+            't.co',
+            'linkedin.',
+            'instagram.',
+            'reddit.',
+            'pinterest.',
+            'tiktok.',
+            'youtube.',
+        )
+
+        if ref:
+            if any(host in ref for host in search_hosts):
+                return 'organic'
+            if any(host in ref for host in social_hosts):
+                return 'referral'
+            try:
+                host = urlparse(ref).netloc.lower()
+            except ValueError:
+                host = ''
+            internal_markers = ('localhost', '127.0.0.1', 'tasknepal')
+            if host and not any(marker in host for marker in internal_markers):
+                return 'referral'
+
+        if any(token in ua for token in ('googlebot', 'bingbot', 'duckduckbot', 'yandexbot')):
+            return 'organic'
+
+        return 'direct'
+
+    @staticmethod
+    def _empty_traffic_breakdown():
+        return {
+            'direct': 0,
+            'referral': 0,
+            'organic': 0,
+            'direct_percent': 0,
+            'referral_percent': 0,
+            'organic_percent': 0,
+        }
+
+    @staticmethod
+    def _build_traffic_breakdown(task_ids, months: int = 12):
+        """Aggregate traffic sources for listing views owned by the dashboard user."""
+        if not task_ids:
+            return DashboardService._empty_traffic_breakdown()
+
+        start, _, _ = DashboardService._month_window(months - 1)
+        views = TaskView.objects.filter(task_id__in=task_ids, viewed_at__gte=start)
+
+        direct = 0
+        referral = 0
+        organic = 0
+        for view in views.iterator():
+            bucket = DashboardService._classify_traffic_source(view.referrer, view.user_agent)
+            if bucket == 'organic':
+                organic += 1
+            elif bucket == 'referral':
+                referral += 1
+            else:
+                direct += 1
+
+        total = direct + referral + organic
+        if total == 0:
+            return DashboardService._empty_traffic_breakdown()
+
+        direct_percent = round(direct / total * 100)
+        referral_percent = round(referral / total * 100)
+        organic_percent = max(0, 100 - direct_percent - referral_percent)
+
+        return {
+            'direct': direct,
+            'referral': referral,
+            'organic': organic,
+            'direct_percent': direct_percent,
+            'referral_percent': referral_percent,
+            'organic_percent': organic_percent,
+        }
+
+    @staticmethod
     def _monthly_series(queryset, date_field: str = 'created_at', months: int = 12):
         points = []
         for offset in range(months - 1, -1, -1):
@@ -199,7 +314,6 @@ class DashboardService:
                 },
             ]
 
-            chart_queryset = Bid.objects.filter(task__owner=user)
             most_viewed_qs = (
                 services_qs.select_related('owner')
                 .prefetch_related('attachments')
@@ -269,7 +383,6 @@ class DashboardService:
                 },
             ]
 
-            chart_queryset = Payment.objects.filter(payer=user, status__in=['succeeded', 'released'])
             most_viewed_qs = (
                 filter_queryset_by_listing_kind(tasks_qs, LISTING_KIND_SERVICE)
                 .select_related('owner')
@@ -296,7 +409,8 @@ class DashboardService:
             recent_completed_projects = []
             activity_qs = Payment.objects.filter(payer=user).select_related('payee')
 
-        profile_views_chart = DashboardService._monthly_series(chart_queryset)
+        owned_task_ids = list(Task.objects.filter(owner=user).values_list('id', flat=True))
+        profile_views_chart = DashboardService._monthly_view_series(owned_task_ids)
 
         most_viewed_services = [
             {
@@ -314,15 +428,7 @@ class DashboardService:
 
         recent_activity = DashboardService._build_recent_activity(user, role)
 
-        total_views = sum(point['val'] for point in profile_views_chart) or 1
-        traffic = {
-            'direct': round(total_views * 0.5),
-            'referral': round(total_views * 0.25),
-            'organic': max(0, total_views - round(total_views * 0.75)),
-            'direct_percent': 50,
-            'referral_percent': 25,
-            'organic_percent': 25,
-        }
+        traffic = DashboardService._build_traffic_breakdown(owned_task_ids)
 
         return {
             **stats,

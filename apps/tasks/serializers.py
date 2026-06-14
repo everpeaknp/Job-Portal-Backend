@@ -182,6 +182,16 @@ class TaskListSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
     primary_image = serializers.SerializerMethodField()
     is_open = serializers.BooleanField(read_only=True)
     is_overdue = serializers.BooleanField(read_only=True)
+    is_bookmarked = serializers.SerializerMethodField()
+
+    def get_is_bookmarked(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        bookmark_ids = self.context.get('user_bookmark_task_ids')
+        if bookmark_ids is not None:
+            return obj.pk in bookmark_ids
+        return TaskBookmark.objects.filter(user=request.user, task=obj).exists()
 
     def get_listing_kind(self, obj):
         return get_listing_kind(obj.tags)
@@ -240,7 +250,7 @@ class TaskListSerializer(TaskOwnerEmployerMixin, serializers.ModelSerializer):
             'category', 'category_name', 'listing_kind', 'primary_image', 'owner', 'owner_name',
             'owner_username', 'owner_image', 'owner_logo_url', 'owner_logo_text', 'owner_logo_color',
             'owner_business_name', 'owner_rating', 'owner_is_verified', 'assigned_tasker', 'due_date',
-            'is_public', 'is_open', 'is_overdue', 'views_count', 'bids_count', 'created_at'
+            'is_public', 'is_open', 'is_overdue', 'is_bookmarked', 'views_count', 'bids_count', 'created_at'
         ]
         read_only_fields = [
             'id', 'slug', 'owner', 'views_count', 'bids_count', 'created_at'

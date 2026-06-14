@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from apps.tasks.models import TaskQuestion
 from apps.tasks.permissions import IsTaskOwner
 from apps.tasks.serializers import TaskQuestionSerializer
+from apps.bookmark.mixins import BookmarkSerializerContextMixin
 from .models import Project
 from .permissions import CanCreateProject
 from .serializers import (
@@ -20,7 +21,7 @@ from .serializers import (
 )
 
 
-class ProjectViewSet(viewsets.ModelViewSet):
+class ProjectViewSet(BookmarkSerializerContextMixin, viewsets.ModelViewSet):
     """
     Marketplace projects API.
 

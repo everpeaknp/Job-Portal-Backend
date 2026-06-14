@@ -22,6 +22,8 @@ from apps.tasks.permissions import IsTaskOwner
 
 from apps.tasks.serializers import TaskQuestionSerializer
 
+from apps.bookmark.mixins import BookmarkSerializerContextMixin
+
 from .models import Job
 
 from .permissions import CanCreateJob
@@ -42,7 +44,7 @@ from .serializers import (
 
 
 
-class JobViewSet(viewsets.ModelViewSet):
+class JobViewSet(BookmarkSerializerContextMixin, viewsets.ModelViewSet):
 
     """
 

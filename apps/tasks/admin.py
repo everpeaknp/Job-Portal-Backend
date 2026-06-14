@@ -206,16 +206,6 @@ class TaskAttachmentAdmin(admin.ModelAdmin):
     ordering = ['-uploaded_at']
 
 
-@admin.register(TaskBookmark)
-class TaskBookmarkAdmin(admin.ModelAdmin):
-    """Admin interface for TaskBookmark model."""
-    
-    list_display = ['user', 'task', 'created_at']
-    list_filter = ['created_at']
-    search_fields = ['user__email', 'task__title']
-    ordering = ['-created_at']
-
-
 @admin.register(TaskView)
 class TaskViewAdmin(admin.ModelAdmin):
     """Admin interface for TaskView model."""

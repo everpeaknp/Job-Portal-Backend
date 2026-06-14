@@ -349,6 +349,7 @@ class TaskView(models.Model):
     )
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(blank=True)
+    referrer = models.URLField(blank=True, null=True, max_length=2048)
     viewed_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:

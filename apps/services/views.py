@@ -8,6 +8,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from .models import Service
 from apps.tasks.permissions import IsTaskOwner
+from apps.bookmark.mixins import BookmarkSerializerContextMixin
 from .permissions import CanCreateService
 from .serializers import (
     ServiceCreateSerializer,
@@ -17,7 +18,7 @@ from .serializers import (
 )
 
 
-class ServiceViewSet(viewsets.ModelViewSet):
+class ServiceViewSet(BookmarkSerializerContextMixin, viewsets.ModelViewSet):
     """
     Marketplace services API.
 

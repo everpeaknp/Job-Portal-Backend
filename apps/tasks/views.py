@@ -33,6 +33,8 @@ from .serializers import (
     TaskReportSerializer, TaskStatsSerializer
 )
 from apps.users.permissions import IsOwner, IsCustomer, IsTasker
+from apps.bookmark.mixins import BookmarkSerializerContextMixin
+from apps.bookmark.services import add_bookmark, list_bookmarked_tasks, remove_bookmark
 from .permissions import IsTaskOwner, IsTaskOwnerOrReadOnly, CanCreateTask
 from .listing import (
     LISTING_KIND_CHOICES,
@@ -81,7 +83,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(serializer.data)
 
 
-class TaskViewSet(viewsets.ModelViewSet):
+class TaskViewSet(BookmarkSerializerContextMixin, viewsets.ModelViewSet):
     """ViewSet for Task CRUD operations."""
     
     permission_classes = [IsAuthenticatedOrReadOnly]
@@ -298,7 +300,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             task=instance,
             user=request.user if request.user.is_authenticated else None,
             ip_address=request.META.get('REMOTE_ADDR'),
-            user_agent=request.META.get('HTTP_USER_AGENT', '')
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            referrer=(request.META.get('HTTP_REFERER') or '')[:2048] or None,
         )
         
         # Increment view count
@@ -486,40 +489,24 @@ class TaskViewSet(viewsets.ModelViewSet):
     def bookmark(self, request, slug=None):
         """Bookmark or unbookmark a task."""
         task = self.get_object()
-        
+
         if request.method == 'POST':
-            bookmark, created = TaskBookmark.objects.get_or_create(
-                user=request.user,
-                task=task
-            )
-            
+            _, created = add_bookmark(request.user, task)
             if created:
-                task.bookmarks_count += 1
-                task.save(update_fields=['bookmarks_count'])
                 return Response({
                     'message': 'Task bookmarked successfully.'
                 }, status=status.HTTP_201_CREATED)
-            else:
-                return Response({
-                    'message': 'Task already bookmarked.'
-                })
-        
-        elif request.method == 'DELETE':
-            deleted_count, _ = TaskBookmark.objects.filter(
-                user=request.user,
-                task=task
-            ).delete()
-            
-            if deleted_count > 0:
-                task.bookmarks_count = max(0, task.bookmarks_count - 1)
-                task.save(update_fields=['bookmarks_count'])
-                return Response({
-                    'message': 'Bookmark removed successfully.'
-                })
-            else:
-                return Response({
-                    'error': 'Task was not bookmarked.'
-                }, status=status.HTTP_404_NOT_FOUND)
+            return Response({
+                'message': 'Task already bookmarked.'
+            })
+
+        if remove_bookmark(request.user, task):
+            return Response({
+                'message': 'Bookmark removed successfully.'
+            })
+        return Response({
+            'error': 'Task was not bookmarked.'
+        }, status=status.HTTP_404_NOT_FOUND)
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def my_tasks(self, request):
@@ -556,15 +543,15 @@ class TaskViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def bookmarked(self, request):
         """Get user's bookmarked tasks."""
-        bookmarks = TaskBookmark.objects.filter(user=request.user).select_related('task')
-        tasks = [bookmark.task for bookmark in bookmarks]
-        
+        listing_kind = request.query_params.get('listing_kind')
+        tasks = list_bookmarked_tasks(request.user, listing_kind)
+
         page = self.paginate_queryset(tasks)
         if page is not None:
-            serializer = TaskListSerializer(page, many=True, context={'request': request})
+            serializer = TaskListSerializer(page, many=True, context=self.get_serializer_context())
             return self.get_paginated_response(serializer.data)
-        
-        serializer = TaskListSerializer(tasks, many=True, context={'request': request})
+
+        serializer = TaskListSerializer(tasks, many=True, context=self.get_serializer_context())
         return Response(serializer.data)
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])

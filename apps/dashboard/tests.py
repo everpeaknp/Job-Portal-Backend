@@ -10,7 +10,9 @@ from rest_framework.test import APIClient
 from rest_framework import status
 
 from apps.dashboard.tier_service import resolve_tasker_tier
+from apps.dashboard.services import DashboardService
 from apps.payments.models import Payment
+from apps.tasks.models import Task, TaskView, Category
 from django.contrib.contenttypes.models import ContentType
 
 User = get_user_model()
@@ -133,3 +135,49 @@ class DashboardAPITestCase(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['earnings']['last_30_days'], 900.0)
         self.assertEqual(response.data['tier']['current']['slug'], 'silver')
+
+    def test_my_overview_traffic_from_listing_views(self):
+        category = Category.objects.create(name='Test Cat', slug='test-cat-traffic')
+        task = Task.objects.create(
+            owner=self.regular_user,
+            title='Traffic test task',
+            slug='traffic-test-task',
+            description='Test',
+            category=category,
+            budget_amount=Decimal('1000.00'),
+            budget_currency='NPR',
+            status='open',
+        )
+        TaskView.objects.create(
+            task=task,
+            referrer='https://www.google.com/search?q=tasknepal',
+            user_agent='Mozilla/5.0',
+        )
+        TaskView.objects.create(
+            task=task,
+            referrer='https://www.facebook.com/post/1',
+            user_agent='Mozilla/5.0',
+        )
+        TaskView.objects.create(task=task, referrer='', user_agent='Mozilla/5.0')
+
+        self.client.force_authenticate(user=self.regular_user)
+        response = self.client.get('/api/v1/dashboard/my_overview/')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        traffic = response.data['overview']['traffic']
+        self.assertEqual(traffic['direct'], 1)
+        self.assertEqual(traffic['referral'], 1)
+        self.assertEqual(traffic['organic'], 1)
+        self.assertEqual(traffic['direct_percent'] + traffic['referral_percent'] + traffic['organic_percent'], 100)
+        self.assertNotEqual(traffic['direct_percent'], 50)
+
+    def test_classify_traffic_source(self):
+        self.assertEqual(
+            DashboardService._classify_traffic_source('https://www.google.com/search?q=hi', ''),
+            'organic',
+        )
+        self.assertEqual(
+            DashboardService._classify_traffic_source('https://www.facebook.com/x', ''),
+            'referral',
+        )
+        self.assertEqual(DashboardService._classify_traffic_source('', 'Mozilla/5.0'), 'direct')
