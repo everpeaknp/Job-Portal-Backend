@@ -13,6 +13,8 @@ from apps.users.employer_profile_service import resolve_employer_image_url
 
 from .listing import (
     LISTING_KIND_CHOICES,
+    LISTING_KIND_TASK,
+    LISTING_KIND_CATEGORY_CHOICES,
     get_listing_kind,
     with_listing_kind,
 )
@@ -59,7 +61,7 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = [
             'id', 'name', 'slug', 'description', 'icon',
-            'parent', 'is_active', 'order', 'subcategories'
+            'listing_kind', 'parent', 'is_active', 'order', 'subcategories'
         ]
         read_only_fields = ['id']
     
@@ -353,7 +355,7 @@ class TaskCreateSerializer(serializers.ModelSerializer):
     """Serializer for creating tasks."""
 
     listing_kind = serializers.ChoiceField(
-        choices=[(kind, kind) for kind in LISTING_KIND_CHOICES],
+        choices=LISTING_KIND_CATEGORY_CHOICES,
         required=False,
         allow_null=True,
         write_only=True,
@@ -367,6 +369,7 @@ class TaskCreateSerializer(serializers.ModelSerializer):
             'location_type', 'address', 'city', 'state', 'country',
             'postal_code', 'latitude', 'longitude',
             'due_date', 'is_public', 'allow_bids', 'tags', 'requirements',
+            'listing_kind',
             'status', 'created_at'
         ]
         read_only_fields = ['id', 'slug', 'status', 'created_at']
@@ -407,7 +410,7 @@ class TaskCreateSerializer(serializers.ModelSerializer):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
 
-        if listing_kind:
+        if listing_kind and listing_kind != LISTING_KIND_TASK:
             if listing_kind == 'service':
                 if user and user.role not in ('tasker', 'admin'):
                     raise serializers.ValidationError(

@@ -366,6 +366,72 @@ class UserBadge(models.Model):
         return f"{self.user.get_full_name()} - {self.name}"
 
 
+KYC_DOCUMENT_TYPES = (
+    'id_card',
+    'passport',
+    'driver_license',
+    'proof_of_address',
+    'police_check',
+)
+
+
+class UserKYC(models.Model):
+    """Identity Trust Program — government ID verification for dashboard settings."""
+
+    STATUS_CHOICES = [
+        ('not_started', 'Not started'),
+        ('pending', 'Pending review'),
+        ('under_review', 'Under review'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='kyc',
+    )
+    pan_number = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text='Permanent Account Number (PAN) submitted with identity verification.',
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='not_started',
+        db_index=True,
+    )
+    admin_notes = models.TextField(
+        blank=True,
+        help_text='Internal notes for admins (not shown to the user).',
+    )
+    rejection_reason = models.TextField(
+        blank=True,
+        help_text='Reason shown to the user when verification is rejected.',
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='kyc_reviews',
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'user_kyc'
+        verbose_name = 'KYC'
+        verbose_name_plural = 'KYC'
+
+    def __str__(self):
+        return f"KYC — {self.user.email} ({self.get_status_display()})"
+
+
 class UserDocument(models.Model):
     """KYC and verification documents."""
     

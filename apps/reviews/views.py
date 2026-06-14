@@ -137,12 +137,24 @@ class ReviewViewSet(viewsets.ReadOnlyModelViewSet):
         reviews = Review.objects.filter(reviewer=request.user).select_related(
             'task', 'reviewee',
         )
-        return Response(ReviewListSerializer(reviews, many=True).data)
+        return Response(
+            ReviewListSerializer(
+                reviews,
+                many=True,
+                context={'request': request},
+            ).data,
+        )
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def received(self, request):
         reviews = ReviewService.get_reviews_received(request.user)
-        return Response(ReviewListSerializer(reviews, many=True).data)
+        return Response(
+            ReviewListSerializer(
+                reviews,
+                many=True,
+                context={'request': request},
+            ).data,
+        )
 
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def stats(self, request):

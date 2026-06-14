@@ -12,6 +12,7 @@ from apps.services.serializers import ServiceListSerializer
 from .freelancer_profile_service import (
     freelancer_public_slug,
     get_freelancer_user_by_slug,
+    is_freelancer_public_profile_ready,
 )
 from .models import User
 from .portfolio_service import get_public_portfolio_items, portfolio_document_status_map
@@ -79,6 +80,7 @@ class FreelancerPublicDetailView(APIView):
         user = _prefetch_freelancer_user(user)
         data = PublicProfileSerializer(user, context={'request': request}).data
         data['slug'] = freelancer_public_slug(user)
+        data['profile_configured'] = is_freelancer_public_profile_ready(user)
         return Response(data)
 
 

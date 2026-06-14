@@ -17,7 +17,7 @@ from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 
-from .models import User, UserSkill, UserBadge, UserDocument, PortfolioItem, UserFollow
+from .models import User, UserSkill, UserBadge, UserDocument, UserKYC, PortfolioItem, UserFollow
 from .serializers import (
     UserListSerializer, UserDetailSerializer, UserProfileSerializer,
     UserRegistrationSerializer, ChangePasswordSerializer,
@@ -26,6 +26,7 @@ from .serializers import (
     UserDirectorySerializer,
     TaskerPublicProfileSerializer, PublicProfileSerializer, UserSkillSerializer,
     UserBadgeSerializer, UserBadgeCreateSerializer, UserDocumentSerializer,
+    UserKYCSerializer, UserKYCUpdateSerializer,
     PortfolioItemSerializer,
 )
 from .badge_service import sync_auto_badges, request_or_sync_badge
@@ -49,6 +50,7 @@ from .document_service import (
     save_user_document_upload,
     upsert_user_document,
 )
+from .kyc_service import get_or_create_kyc, mark_kyc_submitted
 from .permissions import IsOwnerOrReadOnly, IsOwner
 
 User = get_user_model()
@@ -148,12 +150,45 @@ class UserViewSet(viewsets.ModelViewSet):
             )
             serializer.is_valid(raise_exception=True)
             serializer.save()
+            mark_kyc_submitted(request.user)
             return Response(
                 UserDetailSerializer(request.user, context={'request': request}).data
             )
 
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+    @action(
+        detail=False,
+        methods=['get', 'patch'],
+        url_path='me/kyc',
+        permission_classes=[IsAuthenticated],
+    )
+    def me_kyc(self, request):
+        """
+        Identity Trust Program (dashboard Verify Account).
+
+        GET  /api/v1/users/me/kyc/  — status, PAN, uploaded documents
+        PATCH /api/v1/users/me/kyc/ — update pan_number; marks submission for review
+        """
+        kyc = get_or_create_kyc(request.user)
+
+        if request.method == 'PATCH':
+            serializer = UserKYCUpdateSerializer(
+                kyc,
+                data=request.data,
+                partial=True,
+                context={'request': request},
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            mark_kyc_submitted(request.user)
+            kyc.refresh_from_db()
+            return Response(
+                UserKYCSerializer(kyc, context={'request': request}).data
+            )
+
+        return Response(UserKYCSerializer(kyc, context={'request': request}).data)
 
     @action(detail=False, methods=['patch'], permission_classes=[IsAuthenticated])
     def update_profile(self, request):
@@ -165,6 +200,7 @@ class UserViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        mark_kyc_submitted(request.user)
         return Response(
             UserDetailSerializer(request.user, context={'request': request}).data
         )
@@ -319,6 +355,7 @@ class UserViewSet(viewsets.ModelViewSet):
         city = (request.query_params.get('city') or '').strip()
         min_rating = request.query_params.get('min_rating')
         verified_only = request.query_params.get('verified_only', '').lower()
+        profile_ready = request.query_params.get('profile_ready', '').lower()
         sort_by = (request.query_params.get('sort_by') or 'rating').strip().lower()
 
         if role and role != 'all':
@@ -751,6 +788,7 @@ class UserDocumentViewSet(viewsets.ModelViewSet):
             document_url=document_url,
             document_number=document_number,
         )
+        mark_kyc_submitted(request.user)
 
         serializer = self.get_serializer(doc, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)

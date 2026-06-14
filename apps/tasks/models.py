@@ -8,17 +8,26 @@ from django.utils import timezone
 from django.utils.text import slugify
 from django.contrib.auth import get_user_model
 
+from .listing import LISTING_KIND_TASK, LISTING_KIND_CATEGORY_CHOICES
+
 User = get_user_model()
 
 
 class Category(models.Model):
-    """Task categories."""
-    
+    """Listing categories (scoped by marketplace listing type)."""
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(max_length=100, unique=True)
-    slug = models.SlugField(max_length=100, unique=True)
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=100)
     description = models.TextField(blank=True)
     icon = models.CharField(max_length=50, blank=True, help_text="Icon class or emoji")
+    listing_kind = models.CharField(
+        max_length=20,
+        choices=LISTING_KIND_CATEGORY_CHOICES,
+        default=LISTING_KIND_TASK,
+        db_index=True,
+        help_text='Which listing type this category belongs to (task, job, project, service).',
+    )
     parent = models.ForeignKey(
         'self',
         on_delete=models.CASCADE,
@@ -29,11 +38,21 @@ class Category(models.Model):
     is_active = models.BooleanField(default=True)
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+
     class Meta:
         db_table = 'categories'
         verbose_name_plural = 'Categories'
         ordering = ['order', 'name']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['name', 'listing_kind'],
+                name='categories_name_listing_kind_uniq',
+            ),
+            models.UniqueConstraint(
+                fields=['slug', 'listing_kind'],
+                name='categories_slug_listing_kind_uniq',
+            ),
+        ]
     
     def __str__(self):
         return self.name

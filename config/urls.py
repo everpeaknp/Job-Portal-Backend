@@ -28,6 +28,21 @@ urlpatterns = [
         RedirectView.as_view(url='/admin/rules/rulepolicy/', permanent=False),
         name='admin-rules-home',
     ),
+    path(
+        'admin/category/',
+        RedirectView.as_view(url='/admin/category/category/', permanent=False),
+        name='admin-category-home',
+    ),
+    path(
+        'admin/skills/',
+        RedirectView.as_view(url='/admin/skills/skill/', permanent=False),
+        name='admin-skills-home',
+    ),
+    path(
+        'admin/language/',
+        RedirectView.as_view(url='/admin/language/locale/', permanent=False),
+        name='admin-language-home',
+    ),
     path('admin/', admin.site.urls),
 
     # API documentation (OpenAPI 3 — Swagger UI + ReDoc)
@@ -56,6 +71,8 @@ urlpatterns = [
     path('api/v1/employers/', include('apps.users.employer_urls')),
     path('api/v1/freelancers/', include('apps.users.freelancer_urls')),
     path('api/v1/tasks/', include('apps.tasks.urls')),
+    path('api/v1/skills/', include('apps.skills.urls')),
+    path('api/v1/languages/', include('apps.language.urls')),
     path('api/v1/services/', include('apps.services.urls')),
     path('api/v1/projects/', include('apps.projects.urls')),
     path('api/v1/jobs/', include('apps.jobs.urls')),

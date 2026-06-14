@@ -21,25 +21,9 @@ from apps.dashboard.admin_charts import (
 from apps.dashboard.services import DashboardService
 
 from .models import (
-    Task, Category, TaskAttachment, TaskBookmark,
+    Task, TaskAttachment, TaskBookmark,
     TaskView, TaskQuestion, TaskReport
 )
-
-
-@admin.register(Category)
-class CategoryAdmin(admin.ModelAdmin):
-    """Admin interface for Category model."""
-    
-    list_display = ['name', 'slug', 'parent', 'is_active', 'order', 'task_count']
-    list_filter = ['is_active', 'parent']
-    search_fields = ['name', 'description']
-    prepopulated_fields = {'slug': ('name',)}
-    ordering = ['order', 'name']
-    
-    def task_count(self, obj):
-        """Display number of tasks in category."""
-        return obj.tasks.count()
-    task_count.short_description = 'Tasks'
 
 
 class TaskAttachmentInline(admin.TabularInline):

@@ -9,7 +9,7 @@ from rest_framework import serializers
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.base_user import BaseUserManager
 from django.core.exceptions import ValidationError
-from .models import User, UserSkill, UserBadge, UserDocument, PortfolioItem
+from .models import User, UserSkill, UserBadge, UserDocument, PortfolioItem, UserKYC
 
 
 def _short_city_label(value):
@@ -245,6 +245,53 @@ class UserDocumentSerializer(serializers.ModelSerializer):
 
             return resolve_document_url(request, obj.document_url)
         return obj.document_url
+
+
+class UserKYCSerializer(serializers.ModelSerializer):
+    """Identity Trust Program — dashboard Verify Account section."""
+
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    documents = serializers.SerializerMethodField()
+
+    class Meta:
+        model = UserKYC
+        fields = [
+            'id',
+            'pan_number',
+            'status',
+            'status_display',
+            'rejection_reason',
+            'submitted_at',
+            'reviewed_at',
+            'documents',
+        ]
+        read_only_fields = [
+            'id',
+            'status',
+            'status_display',
+            'rejection_reason',
+            'submitted_at',
+            'reviewed_at',
+            'documents',
+        ]
+
+    def get_documents(self, obj):
+        from .kyc_service import get_kyc_documents
+
+        docs = get_kyc_documents(obj.user)
+        return UserDocumentSerializer(
+            docs,
+            many=True,
+            context=self.context,
+        ).data
+
+
+class UserKYCUpdateSerializer(serializers.ModelSerializer):
+    """User-facing KYC update (personal details live on User; PAN on KYC)."""
+
+    class Meta:
+        model = UserKYC
+        fields = ['pan_number']
 
 
 class UserListSerializer(serializers.ModelSerializer):

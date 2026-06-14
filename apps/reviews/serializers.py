@@ -1,6 +1,7 @@
 """Serializers for bidirectional reviews."""
 from rest_framework import serializers
 
+from apps.tasks.listing import get_listing_kind
 from apps.tasks.serializers import TaskListSerializer
 from apps.users.serializers import PublicUserSerializer
 
@@ -13,6 +14,7 @@ class ReviewListSerializer(serializers.ModelSerializer):
     reviewee = PublicUserSerializer(read_only=True)
     task_title = serializers.CharField(source='task.title', read_only=True)
     task_budget_type = serializers.CharField(source='task.budget_type', read_only=True)
+    task_listing_kind = serializers.SerializerMethodField()
     rating = serializers.IntegerField(source='overall_rating', read_only=True)
     comment = serializers.CharField(source='review_text', read_only=True)
     helpful_count = serializers.SerializerMethodField()
@@ -27,6 +29,7 @@ class ReviewListSerializer(serializers.ModelSerializer):
             'task',
             'task_title',
             'task_budget_type',
+            'task_listing_kind',
             'reviewer',
             'reviewee',
             'reviewer_type',
@@ -45,6 +48,9 @@ class ReviewListSerializer(serializers.ModelSerializer):
             'is_reported',
         ]
         read_only_fields = fields
+
+    def get_task_listing_kind(self, obj):
+        return get_listing_kind(getattr(obj.task, 'tags', None))
 
     def _vote_counts(self, obj):
         cached = getattr(obj, '_helpful_counts', None)

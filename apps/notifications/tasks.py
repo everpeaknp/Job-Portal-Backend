@@ -298,7 +298,7 @@ def send_welcome_email(self, user_id: str):
                     <p>We're here to help you succeed.</p>
                     <p style="margin-top: 30px;">
                         <a href="{settings.FRONTEND_URL}/post-task" class="button">Post Your First Task</a>
-                        <a href="{settings.FRONTEND_URL}/task" class="button">Browse Tasks</a>
+                        <a href="{settings.FRONTEND_URL}/taskmap" class="button">Browse Tasks</a>
                     </p>
                     <p style="margin-top: 30px;">
                         <strong>Need help getting started?</strong><br>

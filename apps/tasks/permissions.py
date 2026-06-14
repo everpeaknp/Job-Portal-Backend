@@ -3,6 +3,8 @@ Custom permissions for Tasks app.
 """
 from rest_framework import permissions
 
+from .listing import LISTING_KIND_TASK
+
 
 class IsTaskOwner(permissions.BasePermission):
     """
@@ -43,7 +45,8 @@ class IsTaskOwnerOrAssignedTasker(permissions.BasePermission):
 
 class CanCreateTask(permissions.BasePermission):
     """
-    Customers create job/project listings; taskers create service listings.
+    Marketplace tasks: customers and taskers.
+    Services: taskers only. Jobs/projects: customers only.
     """
 
     message = 'You do not have permission to create this listing.'
@@ -57,6 +60,10 @@ class CanCreateTask(permissions.BasePermission):
         listing_kind = request.data.get('listing_kind') if hasattr(request.data, 'get') else None
         if listing_kind == 'service':
             return user.role == 'tasker'
+        if listing_kind in (None, '', LISTING_KIND_TASK):
+            return user.role in ('customer', 'tasker')
+        if listing_kind in ('project', 'job'):
+            return user.role == 'customer'
         return user.role == 'customer'
 
 

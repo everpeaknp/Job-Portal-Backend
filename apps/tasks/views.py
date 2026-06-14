@@ -36,7 +36,10 @@ from apps.users.permissions import IsOwner, IsCustomer, IsTasker
 from .permissions import IsTaskOwner, IsTaskOwnerOrReadOnly, CanCreateTask
 from .listing import (
     LISTING_KIND_CHOICES,
+    LISTING_KIND_CATEGORY_CHOICES,
+    LISTING_KIND_TASK,
     filter_queryset_by_listing_kind,
+    filter_queryset_plain_tasks,
 )
 from apps.rules.integrations import cancel_task_with_rules
 from apps.rules.permissions import NotSuspended
@@ -44,11 +47,20 @@ from apps.rules.permissions import NotSuspended
 
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for categories."""
-    
-    queryset = Category.objects.filter(is_active=True, parent=None)
+
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]
     lookup_field = 'slug'
+
+    def get_queryset(self):
+        listing_kind = self.request.query_params.get('listing_kind', LISTING_KIND_TASK)
+        if listing_kind not in dict(LISTING_KIND_CATEGORY_CHOICES):
+            listing_kind = LISTING_KIND_TASK
+        return Category.objects.filter(
+            is_active=True,
+            parent=None,
+            listing_kind=listing_kind,
+        )
     
     @action(detail=True, methods=['get'])
     def tasks(self, request, slug=None):
@@ -99,6 +111,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         listing_kind = self.request.query_params.get('listing_kind')
         if listing_kind in LISTING_KIND_CHOICES:
             queryset = filter_queryset_by_listing_kind(queryset, listing_kind)
+        elif listing_kind == LISTING_KIND_TASK:
+            queryset = filter_queryset_plain_tasks(queryset)
         return queryset
     
     def get_serializer_class(self):
@@ -515,6 +529,8 @@ class TaskViewSet(viewsets.ModelViewSet):
         listing_kind = request.query_params.get('listing_kind')
         if listing_kind in LISTING_KIND_CHOICES:
             tasks = filter_queryset_by_listing_kind(tasks, listing_kind)
+        elif listing_kind == LISTING_KIND_TASK:
+            tasks = filter_queryset_plain_tasks(tasks)
         
         page = self.paginate_queryset(tasks)
         if page is not None:

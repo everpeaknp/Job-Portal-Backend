@@ -19,7 +19,8 @@ from apps.dashboard.admin_charts import (
 from apps.dashboard.services import DashboardService
 from django.db.models.functions import TruncDate
 
-from .models import User, UserSkill, UserBadge, UserDocument
+from .models import User, UserSkill, UserBadge, UserDocument, UserKYC
+from .kyc_service import approve_kyc, get_kyc_documents, reject_kyc
 
 
 @admin.register(User)
@@ -326,3 +327,190 @@ class UserDocumentAdmin(admin.ModelAdmin):
 
             obj.verified_at = timezone.now()
         super().save_model(request, obj, form, change)
+
+
+@admin.register(UserKYC)
+class UserKYCAdmin(admin.ModelAdmin):
+    """Identity Trust Program — review dashboard Verify Account submissions."""
+
+    list_display = [
+        'user',
+        'status',
+        'pan_number',
+        'submitted_at',
+        'reviewed_at',
+        'identity_doc_status',
+        'address_doc_status',
+        'police_doc_status',
+    ]
+    list_filter = ['status', 'submitted_at', 'reviewed_at']
+    search_fields = [
+        'user__email',
+        'user__first_name',
+        'user__last_name',
+        'user__phone',
+        'pan_number',
+    ]
+    ordering = ['-submitted_at', '-updated_at']
+    readonly_fields = [
+        'user',
+        'personal_details_panel',
+        'documents_panel',
+        'submitted_at',
+        'reviewed_at',
+        'reviewed_by',
+        'created_at',
+        'updated_at',
+    ]
+    actions = ['approve_kyc_submissions', 'reject_kyc_submissions', 'mark_under_review']
+
+    fieldsets = (
+        ('User', {
+            'fields': ('user', 'personal_details_panel'),
+        }),
+        ('Identity Trust Program', {
+            'fields': ('status', 'pan_number', 'documents_panel'),
+        }),
+        ('Admin review', {
+            'fields': (
+                'rejection_reason',
+                'admin_notes',
+                'reviewed_by',
+                'reviewed_at',
+                'submitted_at',
+                'created_at',
+                'updated_at',
+            ),
+        }),
+    )
+
+    @admin.display(description='ID document')
+    def identity_doc_status(self, obj):
+        return self._doc_status(obj, ('id_card', 'passport', 'driver_license'))
+
+    @admin.display(description='Address proof')
+    def address_doc_status(self, obj):
+        return self._doc_status(obj, ('proof_of_address',))
+
+    @admin.display(description='Police check')
+    def police_doc_status(self, obj):
+        return self._doc_status(obj, ('police_check',))
+
+    def _doc_status(self, obj, types):
+        doc = (
+            UserDocument.objects.filter(user=obj.user, document_type__in=types)
+            .order_by('-uploaded_at')
+            .first()
+        )
+        if not doc:
+            return '—'
+        return doc.get_status_display()
+
+    @admin.display(description='Personal details')
+    def personal_details_panel(self, obj):
+        user = obj.user
+        profile_block = ''
+        if user.profile_image:
+            profile_block = format_html(
+                '<p><img src="{}" alt="Profile" style="max-height:96px;border-radius:12px;" /></p>',
+                user.profile_image.url,
+            )
+        return format_html(
+            '{}'
+            '<p><strong>Dashboard → Settings → Verify Account</strong></p>'
+            '<table style="max-width:720px;">'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Full name</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Email</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Phone</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Gender</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Date of birth</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Address</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Email verified</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Phone verified</th><td>{}</td></tr>'
+            '<tr><th style="text-align:left;padding:6px 12px 6px 0;">Identity verified</th><td>{}</td></tr>'
+            '</table>',
+            profile_block,
+            user.get_full_name(),
+            user.email,
+            user.phone or '—',
+            user.get_gender_display() if user.gender else '—',
+            user.date_of_birth or '—',
+            user.full_address or '—',
+            'Yes' if user.email_verified else 'No',
+            'Yes' if user.phone_verified else 'No',
+            'Yes' if user.identity_verified else 'No',
+        )
+
+    @admin.display(description='Uploaded documents')
+    def documents_panel(self, obj):
+        docs = get_kyc_documents(obj.user)
+        if not docs.exists():
+            return format_html('<p>No documents uploaded yet.</p>')
+
+        rows = []
+        for doc in docs:
+            link = format_html(
+                '<a href="{}" target="_blank" rel="noopener">View file</a>',
+                doc.document_url,
+            )
+            rows.append(
+                format_html(
+                    '<tr>'
+                    '<td style="padding:6px 8px;">{}</td>'
+                    '<td style="padding:6px 8px;">{}</td>'
+                    '<td style="padding:6px 8px;">{}</td>'
+                    '<td style="padding:6px 8px;">{}</td>'
+                    '</tr>',
+                    doc.get_document_type_display(),
+                    doc.get_status_display(),
+                    doc.uploaded_at.strftime('%Y-%m-%d %H:%M') if doc.uploaded_at else '—',
+                    link,
+                )
+            )
+        return format_html(
+            '<table border="1" cellpadding="0" cellspacing="0" '
+            'style="border-collapse:collapse;max-width:900px;">'
+            '<thead><tr>'
+            '<th style="padding:8px;">Type</th>'
+            '<th style="padding:8px;">Status</th>'
+            '<th style="padding:8px;">Uploaded</th>'
+            '<th style="padding:8px;">File</th>'
+            '</tr></thead><tbody>{}</tbody></table>',
+            format_html(''.join(str(row) for row in rows)),
+        )
+
+    @admin.action(description='Approve selected KYC submissions')
+    def approve_kyc_submissions(self, request, queryset):
+        count = 0
+        for kyc in queryset:
+            approve_kyc(kyc, request.user)
+            count += 1
+        self.message_user(request, f'{count} KYC submission(s) approved.')
+
+    @admin.action(description='Reject selected KYC submissions')
+    def reject_kyc_submissions(self, request, queryset):
+        count = 0
+        for kyc in queryset:
+            reject_kyc(kyc, request.user, kyc.rejection_reason or 'Verification rejected.')
+            count += 1
+        self.message_user(request, f'{count} KYC submission(s) rejected.')
+
+    @admin.action(description='Mark selected as under review')
+    def mark_under_review(self, request, queryset):
+        updated = queryset.update(status='under_review')
+        self.message_user(request, f'{updated} KYC submission(s) marked under review.')
+
+    def save_model(self, request, obj, form, change):
+        previous_status = None
+        if change and obj.pk:
+            previous_status = UserKYC.objects.filter(pk=obj.pk).values_list('status', flat=True).first()
+
+        if obj.status == 'under_review' and not obj.submitted_at:
+            obj.submitted_at = timezone.now()
+
+        super().save_model(request, obj, form, change)
+
+        if obj.status == 'approved' and previous_status != 'approved':
+            approve_kyc(obj, request.user)
+        elif obj.status == 'rejected' and previous_status != 'rejected':
+            reject_kyc(obj, request.user, obj.rejection_reason or 'Verification rejected.')

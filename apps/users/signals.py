@@ -34,10 +34,18 @@ def generate_username(sender, instance, **kwargs):
 def create_user_profile(sender, instance, created, **kwargs):
     """Perform actions after user creation."""
     if created:
-        # TODO: Send welcome email
-        # TODO: Create default notification settings
-        # TODO: Award welcome badge
-        pass
+        from .models import UserKYC
+        UserKYC.objects.get_or_create(user=instance)
+
+
+@receiver(post_save, sender=UserDocument)
+def sync_kyc_on_document_change(sender, instance, **kwargs):
+    """Ensure KYC record exists and reflects pending review after document upload."""
+    from .kyc_service import get_or_create_kyc, mark_kyc_submitted
+
+    get_or_create_kyc(instance.user)
+    if instance.status == 'pending':
+        mark_kyc_submitted(instance.user)
 
 
 @receiver(post_save, sender=UserDocument)
